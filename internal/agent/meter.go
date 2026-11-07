@@ -39,6 +39,10 @@ type trackedConn struct {
 	once    sync.Once
 }
 
+func newTrackedConn(c net.Conn, a *Agent, service string) *trackedConn {
+	return &trackedConn{Conn: c, a: a, service: service}
+}
+
 type connKey struct{}
 
 func connFromContext(ctx context.Context) *trackedConn {

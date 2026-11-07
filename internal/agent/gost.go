@@ -124,7 +124,7 @@ func (l *trackingListener) Accept() (net.Conn, error) {
 		c.Close()
 		return nil, errors.New("agent: not installed")
 	}
-	tc := &trackedConn{Conn: c, a: a, service: l.service}
+	tc := newTrackedConn(c, a, l.service)
 	a.track(tc) // 同时根据服务名确定所属订阅
 	return tc, nil
 }
