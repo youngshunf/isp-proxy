@@ -1,0 +1,36 @@
+# isp-control 配置示例（docs/06 §2）。复制为 /etc/isp-control/isp-control.yaml 后按实际修改。
+# 敏感值不写在这里：数据库连接串、密钥、SMTP 密码、TLS 私钥路径见 isp-control.env.example。
+
+# 对外 HTTP（只监听本机，由反向代理对外提供 HTTPS）。
+listen: 127.0.0.1:8080
+# 生产必须为 true（Cookie 带 Secure，只经 HTTPS 发送）。
+secure_cookies: true
+# 可信反向代理（读取 X-Forwarded-For 作为来源 IP，用于限流与审计）。默认只信任本机回环。
+trusted_proxies:
+  - 127.0.0.1
+  - ::1
+# 显示在管理员验证器 App 中的名称。
+totp_issuer: 示例代理管理后台
+
+# 节点内部接口（mTLS，节点证书 CN = node:<节点 ID>）。只对节点开放，不经过反向代理。
+agent:
+  listen: :8443
+  ca_file: /etc/isp-control/tls/ca.pem
+  cert_file: /etc/isp-control/tls/server.pem
+  # key_file 由环境变量 ISP_AGENT_TLS_KEY_FILE 提供。
+  long_poll: 25s
+
+mail:
+  # smtp：生产；file：开发与测试，把邮件写成 .eml 文件，不发真实邮件。
+  mode: smtp
+  from: 示例代理 <no-reply@example.com>
+  brand: 示例代理
+  site_url: https://portal.example.com
+  smtp_addr: smtp.example.com:587
+  smtp_security: starttls
+  smtp_username: no-reply@example.com
+  # 密码由环境变量 ISP_SMTP_PASSWORD 提供。
+
+log:
+  level: info
+  format: json
