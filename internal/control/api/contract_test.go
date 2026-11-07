@@ -141,6 +141,24 @@ func TestContractRoutes(t *testing.T) {
 			t.Errorf("%s: 管理端路由不应公开", k)
 		}
 	}
+	// 未验证用户不能购买或获取连接（R-15.1、A-23）：用户端除账号与目录外的路由都必须是 VerifiedUser。
+	for k, r := range registered {
+		sr := spec[k]
+		if sr.Admin() {
+			continue
+		}
+		switch {
+		case hasTag(sr, "account"):
+		case hasTag(sr, "catalog"):
+			if r.Auth != httpx.Public {
+				t.Errorf("%s: 目录访客可读，应为 Public", k)
+			}
+		default:
+			if r.Auth != httpx.VerifiedUser {
+				t.Errorf("%s: 应为 VerifiedUser（当前 %s）", k, r.Auth)
+			}
+		}
+	}
 	t.Logf("契约 %d 个操作：已实现 %d，暂缺 %d", len(spec), len(registered), len(notYetImplemented))
 }
 
@@ -153,4 +171,13 @@ func TestContractComplete(t *testing.T) {
 		t.Fatalf("还有 %d 个契约路由未实现", len(notYetImplemented))
 	}
 	t.Skipf("还有 %d 个契约路由未实现（ctl-core）；设置 ISP_REQUIRE_COMPLETE_API=1 时视为失败", len(notYetImplemented))
+}
+
+func hasTag(r apispec.Route, tag string) bool {
+	for _, t := range r.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }
