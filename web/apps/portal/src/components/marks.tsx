@@ -1,4 +1,3 @@
-import { useId } from 'react'
 import type { MarkShape, Tone } from '../lib/status'
 
 /** 固定格里的状态点：实心=成立，空心=不成立，半实心=处理中。形状本身携带含义，不只靠颜色。 */
@@ -18,36 +17,24 @@ export function StateMark({ shape, size = 10 }: { shape: MarkShape; size?: numbe
   )
 }
 
-function hash(s: string): number {
-  let h = 2166136261
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619)
-  return h >>> 0
+// 国旗来自 flag-icons（MIT），4:3 比例；按需取 URL，只有出现在页面上的国旗才会下载。
+const FLAGS = import.meta.glob<string>('../../node_modules/flag-icons/flags/4x3/*.svg', {
+  query: '?url',
+  import: 'default',
+  eager: true,
+})
+
+function flagUrl(code: string): string | undefined {
+  return FLAGS[`../../node_modules/flag-icons/flags/4x3/${code.toLowerCase()}.svg`]
 }
 
-// 四种触点分区，按订阅 ID 固定选择，让每张卡有自己的“芯片”。
-const PATTERNS = [
-  'M1 11.5H14M1 20.5H14M26 11.5H39M26 20.5H39M14 1V31M26 1V31M14 16H26',
-  'M1 11.5H14M1 20.5H14M26 11.5H39M26 20.5H39M14 7V31M26 7V31M14 7H26M20 1V7',
-  'M1 16H14M26 11.5H39M26 20.5H39M14 1V31M26 1V31M14 11H26M14 21H26',
-  'M1 11.5H14M1 20.5H14M26 16H39M14 1V25M26 1V25M14 25H26M20 25V31',
-]
-
-/** SIM 卡金色触点纹样：卡面上唯一使用金色的地方。 */
-export function ContactGlyph({ seed }: { seed: string }) {
-  const id = useId()
-  const d = PATTERNS[hash(seed) % PATTERNS.length]
+/** 出口所在国家的国旗：卡面左上角的识别标记。未知国家显示国家代码。 */
+export function CountryFlag({ code, name, size = 'md' }: { code: string; name: string; size?: 'sm' | 'md' }) {
+  const url = flagUrl(code)
   return (
-    <svg width="40" height="32" viewBox="0 0 40 32" aria-hidden="true" style={{ flex: 'none' }}>
-      <defs>
-        <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="var(--gold-hi)" />
-          <stop offset="0.55" stopColor="var(--gold)" />
-          <stop offset="1" stopColor="#b38d1b" />
-        </linearGradient>
-      </defs>
-      <rect x="0.5" y="0.5" width="39" height="31" rx="5" fill={`url(#${id})`} stroke="var(--gold-line)" strokeWidth="1" />
-      <path d={d} fill="none" stroke="var(--gold-line)" strokeWidth="1.1" strokeLinecap="square" />
-    </svg>
+    <span className={`flag flag-${size}`} role="img" aria-label={name} title={name}>
+      {url ? <img src={url} alt="" draggable={false} /> : <span className="flag-code">{code.toUpperCase()}</span>}
+    </span>
   )
 }
 

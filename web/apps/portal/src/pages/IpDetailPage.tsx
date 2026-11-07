@@ -8,7 +8,7 @@ import { api, errorText, qk } from '../app/api'
 import { AccessPanel } from '../components/AccessPanel'
 import { Balances } from '../components/Balances'
 import { ExitPanel } from '../components/ExitPanel'
-import { ContactGlyph, StateMark } from '../components/marks'
+import { CountryFlag, StateMark } from '../components/marks'
 import { Plate } from '../components/Plate'
 import { ExitFace, StateCell, serial } from '../components/SimCard'
 import { fmtDate } from '../lib/format'
@@ -219,7 +219,7 @@ export default function IpDetailPage() {
                 <StateCell sub={sub} />
                 <div className="sim-face">
                   <div className="sim-top">
-                    <ContactGlyph seed={sub.id} />
+                    <CountryFlag code={sub.exit?.countryCode ?? sub.plan.countryCode} name={sub.exit?.country ?? sub.plan.country} />
                     <div className="sim-title">
                       <div className="sim-name" style={{ cursor: 'default' }}>
                         出口与套餐余量

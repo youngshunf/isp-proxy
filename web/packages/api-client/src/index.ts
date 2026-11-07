@@ -22,6 +22,8 @@ export type ExitCheck = 'ok' | 'slow' | 'failed' | 'stale'
 export interface Exit {
   version: number
   ip: string
+  /** ISO 3166-1 alpha-2，小写，例如 us；用于国旗与筛选。 */
+  countryCode: string
   country: string
   city: string
   check: ExitCheck
@@ -45,7 +47,7 @@ export interface Access {
 export interface Subscription {
   id: string
   name: string
-  plan: { name: string; country: string; city: string; concurrency: number; bandwidthMbps: number }
+  plan: { name: string; countryCode: string; country: string; city: string; concurrency: number; bandwidthMbps: number }
   lifecycle: Lifecycle
   blockers: Blocker[]
   time: {
@@ -96,6 +98,8 @@ export type StockLevel = 'plenty' | 'low' | 'out'
 
 export interface Plan {
   id: string
+  /** ISO 3166-1 alpha-2，小写。 */
+  countryCode: string
   country: string
   city: string
   monthlyPrice: Money

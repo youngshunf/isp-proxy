@@ -16,9 +16,6 @@
   --teal-tint: #e3eef0;
   --teal-tint-2: #cde2e5;
 
-  --gold: #c9a227;
-  --gold-hi: #dfc263;
-  --gold-line: #8a6d10;
 
   --ok: #1d7a4f;
   --warn: #8f5500;
@@ -897,17 +894,44 @@ h3 {
   align-items: center;
   gap: 12px;
 }
-.region-code {
-  width: 34px;
-  height: 24px;
+.flag {
+  flex: none;
   display: inline-grid;
   place-items: center;
-  font-size: 12px;
+  overflow: hidden;
+  position: relative;
+  border-radius: 3px;
+  background: var(--tray);
+}
+/* 内描边压在国旗上，白底国旗（日本、新加坡）在白卡上也有边界 */
+.flag::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgb(20 35 31 / 0.16);
+  pointer-events: none;
+}
+.flag img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+.flag-md {
+  width: 40px;
+  height: 30px;
+}
+.flag-sm {
+  width: 28px;
+  height: 21px;
+  border-radius: 2px;
+}
+.flag-code {
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: var(--teal);
-  border: 1px solid var(--teal-tint-2);
-  background: var(--teal-tint);
+  color: var(--ink-2);
 }
 .stock {
   font-size: 13px;

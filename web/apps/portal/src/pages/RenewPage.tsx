@@ -8,7 +8,7 @@ import { api, errorText, qk } from '../app/api'
 import { OrderSummary, type SummaryLine } from '../components/OrderSummary'
 import { Plate } from '../components/Plate'
 import { ExitFace, StateCell } from '../components/SimCard'
-import { ContactGlyph } from '../components/marks'
+import { CountryFlag } from '../components/marks'
 import { addDays, fmtBytes, fmtDate, fmtMoney } from '../lib/format'
 
 type Kind = 'time' | 'traffic'
@@ -98,7 +98,7 @@ export default function RenewPage() {
                 <StateCell sub={s} />
                 <div className="sim-face">
                   <div className="sim-top">
-                    <ContactGlyph seed={s.id} />
+                    <CountryFlag code={s.exit?.countryCode ?? s.plan.countryCode} name={s.exit?.country ?? s.plan.country} />
                     <div className="sim-title">
                       <div className="sim-name">{s.name}</div>
                       <div className="sim-plan">{s.plan.name}</div>

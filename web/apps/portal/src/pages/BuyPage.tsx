@@ -6,10 +6,10 @@ import { useNavigate } from 'react-router'
 import type { Plan } from '@isp/api-client'
 import { api, errorText, qk } from '../app/api'
 import { OrderSummary } from '../components/OrderSummary'
+import { CountryFlag } from '../components/marks'
 import { Plate } from '../components/Plate'
 import { fmtBytes, fmtMoney } from '../lib/format'
 
-const CODE: Record<string, string> = { 美国: 'US', 英国: 'GB', 德国: 'DE', 日本: 'JP', 新加坡: 'SG' }
 const STOCK = { plenty: '可售', low: '库存紧张', out: '暂时无货' } as const
 
 export default function BuyPage() {
@@ -82,9 +82,7 @@ export default function BuyPage() {
                         <td>
                           <span className="region">
                             <Radio checked={selected} disabled={out} onChange={() => setPlanId(p.id)} aria-label={`${p.country} ${p.city}`} />
-                            <span className="region-code" aria-hidden="true">
-                              {CODE[p.country] ?? '--'}
-                            </span>
+                            <CountryFlag code={p.countryCode} name={p.country} size="sm" />
                             <span>
                               {p.country} · {p.city}
                             </span>
