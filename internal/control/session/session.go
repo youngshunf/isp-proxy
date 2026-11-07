@@ -74,7 +74,9 @@ func (c Cookies) SetUser(w http.ResponseWriter, token string, expires time.Time)
 }
 
 // ClearUser 清除用户会话 Cookie。
-func (c Cookies) ClearUser(w http.ResponseWriter) { c.set(w, UserCookie, "", UserPath, time.Time{}, true) }
+func (c Cookies) ClearUser(w http.ResponseWriter) {
+	c.set(w, UserCookie, "", UserPath, time.Time{}, true)
+}
 
 // SetAdmin 设置管理员会话 Cookie。
 func (c Cookies) SetAdmin(w http.ResponseWriter, token string, expires time.Time) {
@@ -82,7 +84,9 @@ func (c Cookies) SetAdmin(w http.ResponseWriter, token string, expires time.Time
 }
 
 // ClearAdmin 清除管理员会话 Cookie。
-func (c Cookies) ClearAdmin(w http.ResponseWriter) { c.set(w, AdminCookie, "", AdminPath, time.Time{}, true) }
+func (c Cookies) ClearAdmin(w http.ResponseWriter) {
+	c.set(w, AdminCookie, "", AdminPath, time.Time{}, true)
+}
 
 // csrfLifetime 是 isp_csrf 的有效期；过期后下一个响应会重新下发。
 const csrfLifetime = 365 * 24 * time.Hour

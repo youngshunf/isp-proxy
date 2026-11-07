@@ -59,7 +59,9 @@ func HOTP(secret []byte, counter uint64, digits int) string {
 func TOTPStep(t time.Time) int64 { return t.Unix() / totpPeriod }
 
 // TOTPCode 返回 t 时刻的 6 位验证码。
-func TOTPCode(secret []byte, t time.Time) string { return HOTP(secret, uint64(TOTPStep(t)), totpDigits) }
+func TOTPCode(secret []byte, t time.Time) string {
+	return HOTP(secret, uint64(TOTPStep(t)), totpDigits)
+}
 
 // VerifyTOTP 在 now 的 ±1 步内查找与 code 匹配且大于 lastStep 的时间步（防重放：同一时间步只能用一次）。
 // 匹配时返回该时间步。
