@@ -1,0 +1,48 @@
+# 节点 agent 配置示例（gost -agent-config /etc/isp-agent/agent.yaml）。
+# 只是占位示例：路径、地址都要按部署替换。本文件不含也不应含任何密钥内容，只写文件位置。
+# 字段说明见 internal/agent/node/config.go；协议与语义见 docs/06 §5、docs/04 §7。
+
+# 仅用于日志核对。节点身份以客户端证书 CN（node:<id>）为准。
+node_id: nod_example0000000000000
+
+# 控制面节点接口（isp-control :8443，HTTPS + 双向证书）。
+# 开发证书：isp-control dev-certs 生成 ca.pem、node-<id>.pem、node-<id>-key.pem（不进 Git）。
+control:
+  url: https://control.internal.example:8443
+  ca_file: /etc/isp-agent/ca.pem
+  cert_file: /etc/isp-agent/node.pem
+  key_file: /etc/isp-agent/node-key.pem
+  # server_name: control.internal.example   # 可选：覆盖校验服务端证书时使用的名字
+
+# 本地状态目录（自动创建，权限 0700）：
+#   used.json     各订阅累计用量（每 flush_interval 原子落盘）
+#   desired.json  最后一次已应用的期望状态，权限 0600。含接入密码与上游凭据：
+#                 控制面离线时重启靠它恢复服务；不要放到共享盘、不要拷进日志或工单。
+data_dir: /var/lib/isp-agent
+
+# 客户接入端口：端口由控制面下发，这里只定绑定地址与 HTTPS 入口证书。
+entry:
+  bind_host: ""                       # 空 = 全部地址；也可写公网网卡地址
+  cert_file: /etc/isp-agent/entry.pem # HTTPS 入口证书（完整链），续期后自动热更新
+  key_file: /etc/isp-agent/entry-key.pem
+  cert_reload_interval: 1m
+
+# 出站封禁例外（默认封禁 25 端口、私网、环回、链路本地、云元数据）。生产保持为空；
+# 只有本机回环开发环境需要放开 127.0.0.0/8。
+egress:
+  allow_cidrs: []
+  allow_ports: []
+
+# https:// 上游的证书校验：默认用系统根证书校验证书与主机名。
+upstream_tls:
+  ca_file: ""                 # 可选：上游使用私有 CA 时填写
+  insecure_skip_verify: false # 只用于开发
+
+# 出口检测：经上游访问 IP 回显端点（返回纯文本 IP），不经客户接入、不计量。
+probe:
+  echo_url: http://echo.internal.example/ip # 可选：非空时覆盖探测任务自带的地址
+  timeout: 15s
+  concurrency: 4
+
+report_interval: 5s # 上报间隔，最大 5s
+flush_interval: 1s  # 用量落盘间隔，最大 1s
