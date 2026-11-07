@@ -26,6 +26,7 @@ make all
 | `cmd/gost/program.go` | Service lifecycle (`Init`/`Start`/`Stop`), config loading, API/metrics/profiling servers, SIGHUP reload |
 | `cmd/gost/register.go` | Blank imports for all built-in handlers, listeners, dialers, connectors — triggers `init()` registration |
 | `cmd/gost/version.go` | Version resolution: ldflags injection → `buildVersionFallback` + short VCS commit → module build info → bare `buildVersionFallback` |
+| `web/` | pnpm 工作区：`apps/portal` 用户前台原型（React 19 + antd 6 + TanStack Query + React Router Data 模式，内存模拟数据），`packages/api-client` 契约类型与 mock。视觉规范见 `DESIGN.md`；转正步骤见 `docs/05-施工文档.md` §6 |
 | `internal/agent/` | ISP 平台节点代理原型：按订阅计量（`meter.go`）、连接表与 GOST 组件注册、失败即拒绝的出口链（`gost.go`）、订阅状态与持久化（`agent.go`、`store.go`）。设计见 `docs/04-计量与执行方案.md`；尚未接入 `cmd/gost` |
 
 ## CLI Flags
@@ -67,3 +68,5 @@ All components register via `init()` side-effects in their packages. `cmd/gost/r
 E2E tests are in `tests/e2e/` — integration tests using the built binary. Run with `go test ./tests/e2e/...` only when explicitly authorized (see PROJECT.md).
 
 `internal/agent/` has in-process tests on loopback only (fake ISP upstream, no external network): `go test ./internal/agent/` (~3s; add `-race` for concurrency changes). They rely on GOST internals listed in docs/04 §2 — rerun them after any `go-gost/x` upgrade.
+
+`web/` tests: `cd web && corepack pnpm@10.28.1 -r typecheck && corepack pnpm@10.28.1 -r test` (Vitest + Testing Library; mock API only). Dev server: `corepack pnpm@10.28.1 dev:portal` → http://127.0.0.1:5173. Installing packages needs network access.

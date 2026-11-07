@@ -1,0 +1,189 @@
+import { ArrowLeftOutlined, ArrowRightOutlined, WarningOutlined } from '@ant-design/icons'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Result, Segmented, Skeleton, Button } from 'antd'
+import { useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { remainingBytes } from '@isp/api-client'
+import { api, errorText, qk } from '../app/api'
+import { OrderSummary, type SummaryLine } from '../components/OrderSummary'
+import { Plate } from '../components/Plate'
+import { ExitFace, StateCell } from '../components/SimCard'
+import { ContactGlyph } from '../components/marks'
+import { addDays, fmtBytes, fmtDate, fmtMoney } from '../lib/format'
+
+type Kind = 'time' | 'traffic'
+
+export default function RenewPage() {
+  const { id = '' } = useParams()
+  const [params, setParams] = useSearchParams()
+  const kind: Kind = params.get('kind') === 'traffic' ? 'traffic' : 'time'
+  const navigate = useNavigate()
+  const qc = useQueryClient()
+  const sub = useQuery({ queryKey: qk.sub(id), queryFn: () => api.getSubscription(id) })
+  const catalog = useQuery({ queryKey: qk.catalog, queryFn: () => api.getCatalog(), staleTime: 5 * 60_000 })
+  const [months, setMonths] = useState(1)
+  const [packId, setPackId] = useState<string | null>(null)
+  const create = useMutation({
+    mutationFn: () =>
+      kind === 'time'
+        ? api.createOrder({ kind: 'renew_time', subscriptionId: id, months })
+        : api.createOrder({ kind: 'add_traffic', subscriptionId: id, packId: packId! }),
+    onSuccess: (o) => {
+      void qc.invalidateQueries({ queryKey: qk.orders })
+      void qc.invalidateQueries({ queryKey: qk.subs })
+      navigate(`/orders/${o.id}`)
+    },
+  })
+
+  if (sub.isError) {
+    return <Result status="warning" title="没有找到这个 IP" extra={<Button onClick={() => navigate('/ips')}>返回我的 IP</Button>} />
+  }
+  if (!sub.data || !catalog.data) {
+    return (
+      <Plate>
+        <div className="plate-pad">
+          <Skeleton active paragraph={{ rows: 6 }} />
+        </div>
+      </Plate>
+    )
+  }
+  const s = sub.data
+  const c = catalog.data
+  const plan = c.plans.find((p) => p.city === s.plan.city)
+  const monthly = plan?.monthlyPrice.amount ?? 0
+  const retained = s.lifecycle === 'retained'
+  const expired = s.blockers.includes('expired') || s.blockers.includes('released')
+  const pack = c.trafficPacks.find((p) => p.id === packId)
+
+  const lines: SummaryLine[] =
+    kind === 'time'
+      ? [{ label: '续时长', detail: `+${months * c.rules.periodDays} 天 · 不改流量`, amount: { amount: monthly * months, currency: 'CNY' } }]
+      : pack
+        ? [{ label: '买流量', detail: `+${fmtBytes(pack.bytes)} · 不改到期时间`, amount: pack.price }]
+        : []
+
+  const timePreview =
+    retained || expired
+      ? '从重新就绪时起算'
+      : s.time.expiresAt
+        ? `${fmtDate(s.time.expiresAt)} → ${fmtDate(addDays(s.time.expiresAt, months * c.rules.periodDays))}`
+        : '—'
+
+  return (
+    <>
+      <Link className="back-link" to={`/ips/${s.id}`}>
+        <ArrowLeftOutlined /> {s.name}
+      </Link>
+      <div className="page-head">
+        <div>
+          <h1>{kind === 'time' ? '续时长' : '买流量'}</h1>
+          <div className="page-head-sub">两项分别购买：续时长不改流量，买流量不改到期时间。</div>
+          <Segmented
+            style={{ marginTop: 14 }}
+          size="large"
+          value={kind}
+          onChange={(v) => setParams({ kind: String(v) }, { replace: true })}
+          options={[
+            { label: '续时长', value: 'time' },
+            { label: '买流量', value: 'traffic' },
+          ]}
+          />
+        </div>
+      </div>
+      <div className="buy">
+        <div className="detail-col">
+          <div className="sim-wrap">
+            <section className="plate sim" aria-label={`${s.name} 当前状态`}>
+              <div className="plate-body">
+                <StateCell sub={s} />
+                <div className="sim-face">
+                  <div className="sim-top">
+                    <ContactGlyph seed={s.id} />
+                    <div className="sim-title">
+                      <div className="sim-name">{s.name}</div>
+                      <div className="sim-plan">{s.plan.name}</div>
+                    </div>
+                  </div>
+                  <ExitFace sub={s} />
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <Plate title={kind === 'time' ? '选择时长' : '选择流量包'} labelledBy="opt-h">
+            <div className="plate-pad">
+              {kind === 'time' ? (
+                <>
+                  <div className="choice-row">
+                    {c.monthOptions.map((m) => (
+                      <button key={m} type="button" className="choice" aria-pressed={months === m} onClick={() => setMonths(m)}>
+                        <b>+{m * c.rules.periodDays} 天</b>
+                        <span>{fmtMoney({ amount: monthly * m, currency: 'CNY' })}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="preview-change">
+                    到期时间 <b>{timePreview}</b>
+                  </div>
+                  {retained && (
+                    <div className="callout info" style={{ marginTop: 14 }}>
+                      <div>
+                        保留期内续时长：恢复原出口 <span className="mono">{s.exit?.ip}</span> 和原接入，程序不用改配置；时长从重新就绪时起算。
+                      </div>
+                    </div>
+                  )}
+                  {s.blockers.includes('traffic_exhausted') && (
+                    <div className="callout warn" style={{ marginTop: 14 }}>
+                      <WarningOutlined />
+                      <div>流量已用尽：只续时长不能恢复使用，还需要买流量。</div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="choice-row">
+                    {c.trafficPacks.map((p) => (
+                      <button key={p.id} type="button" className="choice" aria-pressed={packId === p.id} onClick={() => setPackId(p.id)}>
+                        <b>+{fmtBytes(p.bytes)}</b>
+                        <span>{fmtMoney(p.price)}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="preview-change">
+                    剩余流量 <b>{fmtBytes(remainingBytes(s))}</b>
+                    <ArrowRightOutlined style={{ fontSize: 11 }} />
+                    <b>{pack ? fmtBytes(remainingBytes(s) + pack.bytes) : '—'}</b>
+                  </div>
+                  {expired && (
+                    <div className="callout warn" style={{ marginTop: 14 }}>
+                      <WarningOutlined />
+                      <div>这个 IP 已到期：买流量后余额会保留，但还需要续时长才能使用。</div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </Plate>
+        </div>
+        <OrderSummary
+          catalog={c}
+          lines={lines}
+          rules={
+            kind === 'time'
+              ? [
+                  '续时长只延长时长，不改流量',
+                  retained || expired ? '到期后续费：从重新就绪时起算' : '有效期内续费：接在原到期时间之后',
+                  '核款确认后入账，同一订单只入账一次',
+                ]
+              : ['买流量只增加流量，不改到期时间', '流量长期保留，不按月清零', '核款确认后入账，同一订单只入账一次']
+          }
+          afterPay="入账"
+          submitText={lines[0] ? `提交订单 · ${fmtMoney(lines[0].amount)}` : '提交订单'}
+          loading={create.isPending}
+          error={create.isError ? errorText(create.error) : null}
+          onSubmit={() => create.mutate()}
+        />
+      </div>
+    </>
+  )
+}

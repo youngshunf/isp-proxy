@@ -51,3 +51,7 @@ __pycache__/
 
 # Claude session config
 .claude/
+
+# Impeccable 评审截图与问答记录（本地生成）
+.impeccable/review/
+.impeccable/questions/
