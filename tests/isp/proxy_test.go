@@ -35,7 +35,9 @@ var AllModes = []Mode{Forward, Connect, HTTPSEntry, SOCKS}
 // TunnelModes 是能建立隧道（可长时间空闲）的三种方式。
 var TunnelModes = []Mode{Connect, HTTPSEntry, SOCKS}
 
-func (m Mode) String() string { return [...]string{"http-forward", "http-connect", "https", "socks5"}[m] }
+func (m Mode) String() string {
+	return [...]string{"http-forward", "http-connect", "https", "socks5"}[m]
+}
 
 // Creds 是一份接入（主机、三个端口、用户名、密码）。
 type Creds struct {
@@ -84,7 +86,7 @@ func (c *countConn) Write(b []byte) (int, error) {
 
 // PConn 是经平台入口建立的连接：隧道方式下已完成握手，Forward 方式下为已认证的保持连接。
 type PConn struct {
-	net.Conn           // 应用层（TLS 之上）
+	net.Conn            // 应用层（TLS 之上）
 	Raw      *countConn // TCP 层计数
 	br       *bufio.Reader
 	mode     Mode

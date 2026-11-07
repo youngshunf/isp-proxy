@@ -63,10 +63,10 @@ type SubscriptionTraffic struct {
 }
 
 type SubscriptionQuotas struct {
-	AccessChangesLeft     int        `json:"accessChangesLeft"`
-	AccessChangesPerDay   int        `json:"accessChangesPerDay"`
-	FreeExitChangesLeft   int        `json:"freeExitChangesLeft"`
-	FreeExitWindowEndsAt  *time.Time `json:"freeExitWindowEndsAt"`
+	AccessChangesLeft    int        `json:"accessChangesLeft"`
+	AccessChangesPerDay  int        `json:"accessChangesPerDay"`
+	FreeExitChangesLeft  int        `json:"freeExitChangesLeft"`
+	FreeExitWindowEndsAt *time.Time `json:"freeExitWindowEndsAt"`
 }
 
 type Subscription struct {
@@ -246,27 +246,27 @@ type AdminAccess struct {
 }
 
 type AdminSubscription struct {
-	ID              string              `json:"id"`
-	Name            string              `json:"name"`
-	User            UserRef             `json:"user"`
-	NodeID          *string             `json:"nodeId"`
-	Lifecycle       string              `json:"lifecycle"`
-	Blockers        []string            `json:"blockers"`
-	AdminPaused     bool                `json:"adminPaused"`
-	Time            SubscriptionTime    `json:"time"`
-	Traffic         SubscriptionTraffic `json:"traffic"`
-	Exit            *AdminExit          `json:"exit"`
-	Access          *AdminAccess        `json:"access"`
-	ActiveConns     *int                `json:"activeConns"`
-	UsageReportedAt *time.Time          `json:"usageReportedAt"`
-	DesiredVersion  int64               `json:"desiredVersion"`
-	AppliedVersion  int64               `json:"appliedVersion"`
-	ActiveTaskID    *string             `json:"activeTaskId"`
-	Quotas          SubscriptionQuotas  `json:"quotas"`
-	RulesVersion    string              `json:"rulesVersion"`
-	ReleasedAt      *time.Time          `json:"releasedAt"`
-	CreatedFromOrderID *string          `json:"createdFromOrderId"`
-	Plan            struct {
+	ID                 string              `json:"id"`
+	Name               string              `json:"name"`
+	User               UserRef             `json:"user"`
+	NodeID             *string             `json:"nodeId"`
+	Lifecycle          string              `json:"lifecycle"`
+	Blockers           []string            `json:"blockers"`
+	AdminPaused        bool                `json:"adminPaused"`
+	Time               SubscriptionTime    `json:"time"`
+	Traffic            SubscriptionTraffic `json:"traffic"`
+	Exit               *AdminExit          `json:"exit"`
+	Access             *AdminAccess        `json:"access"`
+	ActiveConns        *int                `json:"activeConns"`
+	UsageReportedAt    *time.Time          `json:"usageReportedAt"`
+	DesiredVersion     int64               `json:"desiredVersion"`
+	AppliedVersion     int64               `json:"appliedVersion"`
+	ActiveTaskID       *string             `json:"activeTaskId"`
+	Quotas             SubscriptionQuotas  `json:"quotas"`
+	RulesVersion       string              `json:"rulesVersion"`
+	ReleasedAt         *time.Time          `json:"releasedAt"`
+	CreatedFromOrderID *string             `json:"createdFromOrderId"`
+	Plan               struct {
 		PlanID        string `json:"planId"`
 		PlanVersionID string `json:"planVersionId"`
 		PlanVersion   int    `json:"planVersion"`
@@ -357,7 +357,9 @@ type Task struct {
 	FailureReason    *string `json:"failureReason"`
 }
 
-func (t *Task) Done() bool { return t.State == "succeeded" || t.State == "failed" || t.State == "cancelled" }
+func (t *Task) Done() bool {
+	return t.State == "succeeded" || t.State == "failed" || t.State == "cancelled"
+}
 
 type ExitComparison struct {
 	CurrentIP          *string `json:"currentIp"`
