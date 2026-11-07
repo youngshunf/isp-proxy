@@ -4,13 +4,16 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./generated": "./src/generated/schema.ts",
     "./mock": "./src/mock/index.ts"
   },
   "scripts": {
+    "gen": "openapi-typescript ../../../api/openapi.yaml -o src/generated/schema.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run"
   },
   "devDependencies": {
+    "openapi-typescript": "7.13.0",
     "typescript": "5.9.3",
     "vitest": "5.1.0"
   }

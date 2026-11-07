@@ -1,0 +1,3924 @@
+openapi: 3.1.0
+info:
+  title: ISP 代理平台业务 API
+  version: 1.0.0-m1
+  summary: 用户前台（/api/）与管理后台（/admin-api/）的唯一契约
+  description: |
+    M1 冻结的对外契约（docs/05 §5、docs/06 §4）。节点内部接口（/agent/v1/*）不在本文件，见 internal/agentproto。
+
+    通用约定：
+    - 时间为 RFC 3339（UTC）；流量为字节（十进制 GB）；时长为秒；金额为最小货币单位（分），币种 CNY。
+    - 对外 ID 为带前缀的随机串（sub_、ord_、req_、usr_…，100 位随机），不可枚举。访问别人的资源一律返回 404。
+    - 会话放在 HttpOnly Cookie：用户 isp_session，管理员 isp_admin，两者互不通用。
+    - CSRF 双提交：任何响应在缺少时都会下发非 HttpOnly 的 isp_csrf Cookie；所有非 GET 请求必须带值相同的 X-CSRF-Token 头，
+      否则返回 403 forbidden。前端启动时先请求 GET /api/me（或 /admin-api/me）即可拿到该 Cookie。
+    - 错误：HTTP 状态 + Error 对象；code 与前端 ApiErrorCode 一致。message 是面向客户的中文说明，前端只展示，不自行推断业务结论。
+    - 幂等：创建订单、换接入、换出口申请以及管理端会产生账务或变更副作用的写接口要求 Idempotency-Key 头；
+      同一主体同一键重复提交返回首次结果，键相同但请求体不同返回 409 conflict。
+    - 可用性永远读服务端字段（blockers、remainingSeconds），前端不依赖本机时钟判断。
+servers:
+  - url: /
+tags:
+  - name: account
+    description: 用户账号与会话（R-15）
+  - name: subscriptions
+    description: 我的 IP（R-17、R-04、R-11）
+  - name: catalog
+    description: 套餐与规则（R-16）
+  - name: orders
+    description: 订单（R-09、R-16）
+  - name: exit-requests
+    description: 换出口申请（R-11、R-17）
+  - name: admin-auth
+    description: 管理员登录与 TOTP（R-15.5、R-15.6、D-15）
+  - name: admin-overview
+    description: 运营概览（R-12）
+  - name: admin-subscriptions
+    description: 订阅管理、换接入/换出口、权益调整（R-12）
+  - name: admin-upstreams
+    description: 上游资源库存（R-03、R-16.3）
+  - name: admin-catalog
+    description: 套餐、流量包与规则版本
+  - name: admin-users
+    description: 用户管理
+  - name: admin-orders
+    description: 订单、人工核款与退款处置
+  - name: admin-exit-requests
+    description: 换出口申请处理（D-19）
+  - name: admin-monitoring
+    description: 节点、告警与审计（R-19）
+
+paths:
+  # ==========================================================================
+  # 用户端：账号与会话
+  # ==========================================================================
+  /api/me:
+    get:
+      operationId: session
+      tags: [account]
+      summary: 当前会话的账号
+      description: 已登录返回账号；未登录返回 401（前端映射为 null）。同时确保下发 isp_csrf Cookie。
+      security: [{}, {userSession: []}]
+      responses:
+        '200':
+          description: 当前账号
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Account'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/sessions:
+    post:
+      operationId: login
+      tags: [account]
+      summary: 邮箱密码登录
+      description: |
+        成功时设置 isp_session。邮箱或密码错误统一返回 422 invalid（不区分哪一项错）；按邮箱与来源 IP 分别限流。
+        封禁账号也可以登录查看（account.status = banned，订阅阻断原因含 account_banned），但所有写操作返回 412。
+      security: [{}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginInput'}
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Account'}
+        '422': {$ref: '#/components/responses/Invalid'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/sessions/current:
+    delete:
+      operationId: logout
+      tags: [account]
+      summary: 退出登录（撤销当前会话）
+      security: [{userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204': {description: 已退出}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/account/register:
+    post:
+      operationId: register
+      tags: [account]
+      summary: 注册
+      description: |
+        为不泄露邮箱是否已注册（R-15.3），对任何格式正确的邮箱都返回 201 和相同的响应体，且不建立会话；
+        新邮箱收到验证码，已注册邮箱收到“该邮箱已有账号”的提醒邮件。随后用 verify-email（带 email）完成验证并登录。
+      security: [{}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RegisterInput'}
+      responses:
+        '201':
+          description: 已受理
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RegisterResult'}
+        '422': {$ref: '#/components/responses/Invalid'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/account/verify-email:
+    post:
+      operationId: verifyEmail
+      tags: [account]
+      summary: 用邮件验证码完成邮箱验证
+      description: |
+        已登录（未验证）时可只传 code；未登录时必须同时传 email，验证成功即建立会话。
+        验证码 6 位、15 分钟有效、最多 5 次尝试、一次性、用途绑定（D-15）。错误、过期、超次统一返回 422。
+      security: [{}, {userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VerifyEmailInput'}
+      responses:
+        '200':
+          description: 已验证，返回账号
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Account'}
+        '422': {$ref: '#/components/responses/Invalid'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/account/resend-verification:
+    post:
+      operationId: resendVerification
+      tags: [account]
+      summary: 重发验证码
+      description: 重发后旧验证码立即失效。已登录时发给本人邮箱；未登录时需传 email，结果一律 204（不泄露是否注册）。同一邮箱 60 秒一次、每小时 5 次。
+      security: [{}, {userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EmailOnlyInput'}
+      responses:
+        '204': {description: 已受理}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/account/password-reset:
+    post:
+      operationId: requestPasswordReset
+      tags: [account]
+      summary: 申请找回密码
+      description: 结果一律 204，不泄露邮箱是否注册；已注册邮箱收到一次性验证码。
+      security: [{}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EmailRequiredInput'}
+      responses:
+        '204': {description: 已受理}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/account/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      tags: [account]
+      summary: 用验证码设置新密码
+      description: |
+        成功后撤销该账号全部会话（R-15.4），需要重新登录。管理员代建的用户也用本接口首次设置密码，成功同时视为邮箱已验证。
+        原型 PortalApi 尚无此方法，F-W4 转正时补上。
+      security: [{}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConfirmPasswordResetInput'}
+      responses:
+        '204': {description: 已设置}
+        '422': {$ref: '#/components/responses/Invalid'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/account/change-password:
+    post:
+      operationId: changePassword
+      tags: [account]
+      summary: 修改登录密码
+      description: 成功后撤销该账号其他全部会话，当前会话换发新令牌。登录密码与接入密码互不影响（R-15.7）。
+      security: [{userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChangePasswordInput'}
+      responses:
+        '204': {description: 已修改}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/Invalid'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  # ==========================================================================
+  # 用户端：我的 IP
+  # ==========================================================================
+  /api/subscriptions:
+    get:
+      operationId: listSubscriptions
+      tags: [subscriptions]
+      summary: 我的 IP 列表
+      description: 只含本人订阅，不含已删除的订阅。blockers 已按 docs/01 §7.2 排序。
+      security: [{userSession: []}]
+      responses:
+        '200':
+          description: 订阅列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Subscription'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+  /api/subscriptions/{subscriptionId}:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: getSubscription
+      tags: [subscriptions]
+      summary: IP 详情
+      security: [{userSession: []}]
+      responses:
+        '200':
+          description: 订阅
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Subscription'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: renameSubscription
+      tags: [subscriptions]
+      summary: 改名（只允许改名）
+      security: [{userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RenameInput'}
+      responses:
+        '200':
+          description: 改名后的订阅
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Subscription'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /api/subscriptions/{subscriptionId}/events:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: listSubscriptionEvents
+      tags: [subscriptions]
+      summary: 时长与流量记录、接入/出口变更历史
+      description: 合并权益账本与接入/出口版本历史，按时间倒序；不含供应商信息与管理端内部条目。
+      security: [{userSession: []}]
+      responses:
+        '200':
+          description: 事件列表（新的在前）
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/SubscriptionEvent'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/subscriptions/{subscriptionId}/access-changes:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: changeAccess
+      tags: [subscriptions]
+      summary: 自助换接入（重置密码 / 更换端口与密码）
+      description: |
+        前置条件见 R-04.8：生命周期为有效或保留期；用户封禁、管理员暂停时返回 412。每订阅滚动 24 小时 5 次（D-18），
+        用完返回 429 quota_exhausted；已有进行中的变更任务返回 409。
+        返回新签发的接入（unseenChanges 标出改动字段）；节点应用完成前订阅的 blockers 含 changing。旧接入在新接入生效时立即失效。
+      security: [{userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChangeAccessInput'}
+      responses:
+        '200':
+          description: 新接入
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Access'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/subscriptions/{subscriptionId}/access/ack:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: acknowledgeAccess
+      tags: [subscriptions]
+      summary: 确认已看到新接入（清空 unseenChanges）
+      security: [{userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204': {description: 已确认}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  # ==========================================================================
+  # 用户端：目录与订单
+  # ==========================================================================
+  /api/catalog:
+    get:
+      operationId: getCatalog
+      tags: [catalog]
+      summary: 可售套餐、流量包、规则版本与收款说明
+      description: 访客可读（R-03 访客）。只含上架套餐；库存只给档位，不暴露具体数量与供应商。
+      security: [{}, {userSession: []}]
+      responses:
+        '200':
+          description: 目录
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Catalog'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/orders:
+    get:
+      operationId: listOrders
+      tags: [orders]
+      summary: 我的订单（新的在前）
+      security: [{userSession: []}]
+      responses:
+        '200':
+          description: 订单列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Order'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+    post:
+      operationId: createOrder
+      tags: [orders]
+      summary: 下单
+      description: |
+        服务端校验套餐可售、价格版本（传了 planVersionId/packVersionId 而已变化时返回 409）、用户状态与库存。
+        新购未付款预留库存 24 小时，每用户同时最多 3 个未付款新购（R-16.4），超出返回 409；无货返回 409。
+        续购类订单只能针对本人订阅。一次订单一个订阅（D-13），新购 quantity 只能为 1。
+      security: [{userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/OrderInput'}
+      responses:
+        '201':
+          description: 新订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Order'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /api/orders/{orderId}:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    get:
+      operationId: getOrder
+      tags: [orders]
+      summary: 订单详情
+      security: [{userSession: []}]
+      responses:
+        '200':
+          description: 订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Order'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/orders/{orderId}/claim-paid:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    post:
+      operationId: claimPaid
+      tags: [orders]
+      summary: 反馈“已转账”
+      description: 只记录 userClaimedPaidAt 作为核对线索，不改变收款状态（R-09.2）。只有待核款订单可用，否则 412。
+      security: [{userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200':
+          description: 订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Order'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /api/orders/{orderId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    post:
+      operationId: cancelOrder
+      tags: [orders]
+      summary: 取消未付款订单
+      description: 只有待核款且未反馈付款的订单可以取消（已反馈付款的请联系客服），否则 412；取消即释放库存预留。
+      security: [{userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200':
+          description: 订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Order'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+
+  # ==========================================================================
+  # 用户端：换出口申请
+  # ==========================================================================
+  /api/exit-requests:
+    get:
+      operationId: listExitRequests
+      tags: [exit-requests]
+      summary: 我的申请（新的在前）
+      description: 不含管理员内部备注、候选资源与供应商信息（R-17）。
+      security: [{userSession: []}]
+      responses:
+        '200':
+          description: 申请列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/ExitRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+    post:
+      operationId: createExitRequest
+      tags: [exit-requests]
+      summary: 申请换出口
+      description: |
+        同一订阅已有未完成申请时返回 409，响应体 existing 为现有申请（R-17.3）。
+        免费次数为每订阅滚动 30 天 1 次（D-19）；超出时 charge = manual，申请进入“待管理员确认收费”，确认前不切换。
+        前置条件同 R-04.8，不满足时 412。
+      security: [{userSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExitRequestInput'}
+      responses:
+        '201':
+          description: 新申请
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExitRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Unverified'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: 已有未完成申请
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExitRequestConflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+
+  # ==========================================================================
+  # 管理端：登录与 TOTP
+  # ==========================================================================
+  /admin-api/sessions:
+    post:
+      operationId: adminLogin
+      tags: [admin-auth]
+      summary: 管理员登录第一步（邮箱 + 密码）
+      description: |
+        成功后设置 isp_admin（尚未完成第二步，只能调用 /admin-api/sessions/current/mfa）。
+        已绑定 TOTP 返回 stage = totp_required；首次登录返回 stage = enrollment_required 及待绑定的密钥。
+        失败统一 422；按邮箱与来源 IP 限流；失败与成功均审计。
+      security: [{}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginInput'}
+      responses:
+        '200':
+          description: 需要第二步
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminLoginChallenge'}
+        '422': {$ref: '#/components/responses/Invalid'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /admin-api/sessions/current/mfa:
+    post:
+      operationId: adminVerifyMfa
+      tags: [admin-auth]
+      summary: 管理员登录第二步（TOTP 或恢复码；首次登录即完成绑定）
+      description: |
+        TOTP：RFC 6238，30 秒，6 位，允许 ±1 步，同一时间步不能重复使用。首次绑定成功时返回 10 个一次性恢复码（只显示这一次）。
+        恢复码登录后该码作废。失败 422，连续失败按限流处理。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdminMfaInput'}
+      responses:
+        '200':
+          description: 登录完成
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminSession'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/Invalid'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /admin-api/sessions/current:
+    delete:
+      operationId: adminLogout
+      tags: [admin-auth]
+      summary: 管理员退出
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204': {description: 已退出}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /admin-api/me:
+    get:
+      operationId: adminMe
+      tags: [admin-auth]
+      summary: 当前管理员
+      description: 未登录或第二步未完成返回 401。同时确保下发 isp_csrf Cookie。
+      security: [{}, {adminSession: []}]
+      responses:
+        '200':
+          description: 当前管理员
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Admin'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /admin-api/me/recovery-codes:
+    post:
+      operationId: adminRegenerateRecoveryCodes
+      tags: [admin-auth]
+      summary: 重新生成恢复码（旧码全部作废）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TotpCodeInput'}
+      responses:
+        '200':
+          description: 新恢复码（只显示这一次）
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecoveryCodes'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/Invalid'}
+
+  # ==========================================================================
+  # 管理端：概览
+  # ==========================================================================
+  /admin-api/overview:
+    get:
+      operationId: adminGetOverview
+      tags: [admin-overview]
+      summary: 运营概览
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 概览
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Overview'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  # ==========================================================================
+  # 管理端：订阅
+  # ==========================================================================
+  /admin-api/subscriptions:
+    get:
+      operationId: adminListSubscriptions
+      tags: [admin-subscriptions]
+      summary: 订阅列表（筛选、分页）
+      security: [{adminSession: []}]
+      parameters:
+        - {name: q, in: query, description: 按订阅 ID、名称、用户邮箱、接入用户名或出口 IP 搜索, schema: {type: string}}
+        - {name: userId, in: query, schema: {type: string}}
+        - {name: nodeId, in: query, schema: {type: string}}
+        - name: lifecycle
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/AdminLifecycle'}
+        - {name: blocker, in: query, description: 含该阻断原因, schema: {$ref: '#/components/schemas/Blocker'}}
+        - {name: usable, in: query, description: true 只看可用（blockers 为空）, schema: {type: boolean}}
+        - {name: expiresBefore, in: query, schema: {type: string, format: date-time}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 一页订阅
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminSubscriptionPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '422': {$ref: '#/components/responses/Invalid'}
+    post:
+      operationId: adminCreateSubscription
+      tags: [admin-subscriptions]
+      summary: 为用户代建订阅并开通（P0a）
+      description: |
+        走与自助下单相同的订单、收款、入账与审计链路（docs/01 §6.1）：创建新购订单 → 记录收款（人工转账或赠送）→
+        入账 → 创建履约任务。指定 resourceId 时用该可售资源，否则按套餐地域自动分配；无库存时订单进入“已收款，交付异常”。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdminCreateSubscriptionInput'}
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminCreateSubscriptionResult'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/subscriptions/{subscriptionId}:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: adminGetSubscription
+      tags: [admin-subscriptions]
+      summary: 订阅详情
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 订阅详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminSubscriptionDetail'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: adminRenameSubscription
+      tags: [admin-subscriptions]
+      summary: 改名
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RenameInput'}
+      responses:
+        '200':
+          description: 订阅详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminSubscriptionDetail'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/subscriptions/{subscriptionId}/pause:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminPauseSubscription
+      tags: [admin-subscriptions]
+      summary: 暂停（立即拒绝新连接，≤ 1 秒关闭存量连接）
+      description: 不顺延期限。已暂停时幂等返回当前状态。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReasonInput'}
+      responses:
+        '200':
+          description: 订阅详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminSubscriptionDetail'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/subscriptions/{subscriptionId}/resume:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminResumeSubscription
+      tags: [admin-subscriptions]
+      summary: 恢复
+      description: 只解除管理员暂停；其他阻断（到期、耗尽、封禁）仍然生效（R-10.1）。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200':
+          description: 订阅详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminSubscriptionDetail'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/subscriptions/{subscriptionId}/deletion:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminDeleteSubscription
+      tags: [admin-subscriptions]
+      summary: 删除订阅
+      description: |
+        停止所有入口、撤销凭据、释放资源，保留订单与消费历史（R-10.7）。有剩余流量时必须 acknowledgeRemainingTraffic = true，
+        否则 412（不得静默没收）。只允许从“有效”或“已释放”删除。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeleteSubscriptionInput'}
+      responses:
+        '200':
+          description: 订阅详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminSubscriptionDetail'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/subscriptions/{subscriptionId}/fulfillment:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminRetryFulfillment
+      tags: [admin-subscriptions]
+      summary: 重试履约（待履约 / 履约异常 / 已释放后续时长）
+      description: 可指定资源；重复提交不会生成第二个订阅、接入或重复入账（R-03.5）。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/FulfillmentInput'}
+      responses:
+        '200':
+          description: 履约任务
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Task'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/subscriptions/{subscriptionId}/access-changes:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminChangeAccess
+      tags: [admin-subscriptions]
+      summary: 代办换接入 / 重置密码
+      description: 不计入用户自助次数；暂停或封禁时仍可操作（R-04.8）。已有进行中任务时 409。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdminChangeAccessInput'}
+      responses:
+        '200':
+          description: 变更任务
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Task'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/subscriptions/{subscriptionId}/access/reveal:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminRevealAccess
+      tags: [admin-subscriptions]
+      summary: 查看当前接入明文（审计）
+      description: 需要填写原因；记录审计（access.reveal），审计中不含明文（R-04.9）。管理员不能查看用户登录密码。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReasonInput'}
+      responses:
+        '200':
+          description: 接入明文
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccessSecret'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/subscriptions/{subscriptionId}/access-versions:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: adminListAccessVersions
+      tags: [admin-subscriptions]
+      summary: 接入版本历史（新的在前，不含密码）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 接入版本
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AccessVersion'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/subscriptions/{subscriptionId}/exit-bindings:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: adminListExitBindings
+      tags: [admin-subscriptions]
+      summary: 出口版本历史（新的在前）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 出口绑定
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/ExitBinding'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/subscriptions/{subscriptionId}/exit-checks:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminCheckExit
+      tags: [admin-subscriptions]
+      summary: 手动检测当前出口
+      description: 下发 exit_check 探测，异步完成；用 GET /admin-api/probes/{probeId} 查结果。检测流量不计入客户（R-05.5）。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '202':
+          description: 已下发的探测
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Probe'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/subscriptions/{subscriptionId}/exit-candidates:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminCompareExitCandidate
+      tags: [admin-subscriptions]
+      summary: 换出口第二、三步：验证候选资源并与当前出口比较
+      description: |
+        流程：录入候选上游（POST /admin-api/upstreams）→ 本接口下发 candidate_compare 探测（验证认证与连通、取得实际出口）
+        → 查探测结果中的 comparison（与当前出口不同、平台内独占、国家符合套餐）→ POST exit-changes 提交 → GET tasks/{taskId} 查结果。
+        候选资源必须是 available 或 pending_verify 且不属于其他订阅。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExitCandidateInput'}
+      responses:
+        '202':
+          description: 已下发的比较探测
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Probe'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/subscriptions/{subscriptionId}/exit-changes:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminSubmitExitChange
+      tags: [admin-subscriptions]
+      summary: 换出口第四步：提交换出口（可组合更换接入）
+      description: |
+        要求 compareProbeId 是该订阅、该资源最近一次已完成且三项比较均通过的探测（否则 412）；地址相同只能报告“上游已更新，出口未变”，
+        不能提交（R-11.3）。alsoChangeAccess = true 为组合更换：新接入直接绑定新出口，任一步失败整体回到原状态（R-11.6）。
+        关联 exitRequestId 时任务结束会自动更新申请状态。已有进行中任务时 409。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExitChangeInput'}
+      responses:
+        '200':
+          description: 变更任务
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Task'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/subscriptions/{subscriptionId}/tasks:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: adminListSubscriptionTasks
+      tags: [admin-subscriptions]
+      summary: 变更任务历史（新的在前）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 任务
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Task'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/subscriptions/{subscriptionId}/ledger:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: adminListLedger
+      tags: [admin-subscriptions]
+      summary: 时长与流量账本（按时间正序）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 账本
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Ledger'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/subscriptions/{subscriptionId}/ledger-entries:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    post:
+      operationId: adminCreateLedgerEntry
+      tags: [admin-subscriptions]
+      summary: 调整、赠送、补偿（独立账本条目）
+      description: |
+        只追加账本条目，不能覆盖余额或回退 used（R-08.8）。adjust 可正可负，gift / compensation 只能为正；
+        扣回不能让合计为负（412）。补时（D-21）用 compensation + time。退款走订单退款流程，划转走 /admin-api/transfers。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LedgerEntryInput'}
+      responses:
+        '201':
+          description: 新账本条目
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LedgerEntry'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/subscriptions/{subscriptionId}/events:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: adminListSubscriptionEvents
+      tags: [admin-subscriptions]
+      summary: 订阅时间线（含管理端内部条目，新的在前）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 事件
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AdminSubscriptionEvent'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/subscriptions/{subscriptionId}/usage:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: adminGetSubscriptionUsage
+      tags: [admin-subscriptions, admin-monitoring]
+      summary: 流量与连接趋势
+      description: |
+        来源为节点上报的累计值差分，不作为扣量依据（R-19.2）。每个桶给出数据时间；没有样本的桶 bytes 为 null（断联或无数据），
+        与真实零值区分。最长查询 90 天（D-07）。
+      security: [{adminSession: []}]
+      parameters:
+        - {name: from, in: query, required: true, schema: {type: string, format: date-time}}
+        - {name: to, in: query, required: true, schema: {type: string, format: date-time}}
+        - {name: bucket, in: query, schema: {type: string, enum: [5m, 1h, 1d], default: 1h}}
+      responses:
+        '200':
+          description: 趋势
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UsageSeries'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/transfers:
+    post:
+      operationId: adminTransferBalance
+      tags: [admin-subscriptions]
+      summary: 同用户订阅间全额划转剩余流量（R-10.6）
+      description: 来源订阅剩余流量全额转入目标订阅，记为成对账本条目，来源余额归零并标注去向。两订阅必须属于同一用户（否则 412）。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TransferInput'}
+      responses:
+        '201':
+          description: 划转记录
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Transfer'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/tasks/{taskId}:
+    parameters:
+      - {name: taskId, in: path, required: true, schema: {type: string}}
+    get:
+      operationId: adminGetTask
+      tags: [admin-subscriptions]
+      summary: 变更任务（换出口第五步：查结果）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 任务
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Task'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/probes/{probeId}:
+    parameters:
+      - {name: probeId, in: path, required: true, schema: {type: string}}
+    get:
+      operationId: adminGetProbe
+      tags: [admin-subscriptions, admin-upstreams]
+      summary: 探测结果
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 探测
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Probe'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  # ==========================================================================
+  # 管理端：上游资源
+  # ==========================================================================
+  /admin-api/upstreams:
+    get:
+      operationId: adminListUpstreams
+      tags: [admin-upstreams]
+      summary: 上游资源列表
+      security: [{adminSession: []}]
+      parameters:
+        - name: status
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/UpstreamStatus'}
+        - {name: countryCode, in: query, schema: {type: string, pattern: '^[a-z]{2}$'}}
+        - {name: city, in: query, schema: {type: string}}
+        - {name: nodeId, in: query, schema: {type: string}}
+        - {name: q, in: query, description: 按资源 ID、主机、供应商、出口 IP 搜索, schema: {type: string}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 一页资源
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UpstreamPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: adminCreateUpstream
+      tags: [admin-upstreams]
+      summary: 录入上游资源
+      description: |
+        支持粘贴 url（socks5:// http:// https://，正确处理 URL 编码凭据、域名与 IPv6），也可逐字段录入；两者都给时以字段为准。
+        录入后状态为 pending_verify，用 verify 下发验证，通过后进入 available（R-03.2）。同一协议+主机+端口+用户名重复录入返回 409。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpstreamInput'}
+      responses:
+        '201':
+          description: 新资源
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Upstream'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/upstreams/{upstreamId}:
+    parameters:
+      - $ref: '#/components/parameters/UpstreamId'
+    get:
+      operationId: adminGetUpstream
+      tags: [admin-upstreams]
+      summary: 上游资源详情（不含密码明文）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 资源
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Upstream'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: adminUpdateUpstream
+      tags: [admin-upstreams]
+      summary: 修改上游资源
+      description: |
+        带 rowVersion 乐观锁，过期返回 409。修改连接信息（协议、主机、端口、凭据）会让资源回到 pending_verify；
+        已占用（bound）的资源不能改连接信息（412），需走换出口。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpstreamPatch'}
+      responses:
+        '200':
+          description: 资源
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Upstream'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/upstreams/{upstreamId}/status:
+    parameters:
+      - $ref: '#/components/parameters/UpstreamId'
+    post:
+      operationId: adminSetUpstreamStatus
+      tags: [admin-upstreams]
+      summary: 人工改变库存状态（上架、隔离、停用）
+      description: |
+        允许的人工转换：pending_verify/cooldown/quarantine → available（要求最近一次验证通过）；任意非 bound → quarantine 或 retired。
+        reserved、bound、cooldown 由订单、任务与调度维护，不能人工设入。已占用资源要先换出口。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpstreamStatusInput'}
+      responses:
+        '200':
+          description: 资源
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Upstream'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/upstreams/{upstreamId}/verify:
+    parameters:
+      - $ref: '#/components/parameters/UpstreamId'
+    post:
+      operationId: adminVerifyUpstream
+      tags: [admin-upstreams]
+      summary: 从所属节点验证上游（认证、连通、实际出口）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '202':
+          description: 已下发的验证探测
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Probe'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+
+  # ==========================================================================
+  # 管理端：套餐、流量包、规则
+  # ==========================================================================
+  /admin-api/plans:
+    get:
+      operationId: adminListPlans
+      tags: [admin-catalog]
+      summary: 套餐列表（含当前版本与库存）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 套餐
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AdminPlan'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: adminCreatePlan
+      tags: [admin-catalog]
+      summary: 新建套餐（草稿，含版本 1）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PlanCreateInput'}
+      responses:
+        '201':
+          description: 新套餐
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminPlan'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/plans/{planId}:
+    parameters:
+      - $ref: '#/components/parameters/PlanId'
+    get:
+      operationId: adminGetPlan
+      tags: [admin-catalog]
+      summary: 套餐详情（含全部版本）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 套餐
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminPlan'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/plans/{planId}/versions:
+    parameters:
+      - $ref: '#/components/parameters/PlanId'
+    post:
+      operationId: adminCreatePlanVersion
+      tags: [admin-catalog]
+      summary: 发布新版本（只追加，立即成为当前版本；已购权益不追溯）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PlanVersionInput'}
+      responses:
+        '201':
+          description: 套餐
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminPlan'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/plans/{planId}/status:
+    parameters:
+      - $ref: '#/components/parameters/PlanId'
+    post:
+      operationId: adminSetPlanStatus
+      tags: [admin-catalog]
+      summary: 上架 / 下架
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SaleStatusInput'}
+      responses:
+        '200':
+          description: 套餐
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminPlan'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/traffic-packs:
+    get:
+      operationId: adminListTrafficPacks
+      tags: [admin-catalog]
+      summary: 流量包列表
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 流量包
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AdminTrafficPack'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: adminCreateTrafficPack
+      tags: [admin-catalog]
+      summary: 新建流量包（草稿，含版本 1）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TrafficPackCreateInput'}
+      responses:
+        '201':
+          description: 新流量包
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrafficPack'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/traffic-packs/{trafficPackId}:
+    parameters:
+      - $ref: '#/components/parameters/TrafficPackId'
+    get:
+      operationId: adminGetTrafficPack
+      tags: [admin-catalog]
+      summary: 流量包详情（含全部版本）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 流量包
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrafficPack'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/traffic-packs/{trafficPackId}/versions:
+    parameters:
+      - $ref: '#/components/parameters/TrafficPackId'
+    post:
+      operationId: adminCreateTrafficPackVersion
+      tags: [admin-catalog]
+      summary: 发布流量包新版本
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TrafficPackVersionInput'}
+      responses:
+        '201':
+          description: 流量包
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrafficPack'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/traffic-packs/{trafficPackId}/status:
+    parameters:
+      - $ref: '#/components/parameters/TrafficPackId'
+    post:
+      operationId: adminSetTrafficPackStatus
+      tags: [admin-catalog]
+      summary: 上架 / 下架流量包
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SaleStatusInput'}
+      responses:
+        '200':
+          description: 流量包
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrafficPack'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/rules:
+    get:
+      operationId: adminListRules
+      tags: [admin-catalog]
+      summary: 规则版本（新的在前；第一条为当前生效）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 规则版本
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/RulesVersion'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: adminCreateRules
+      tags: [admin-catalog]
+      summary: 发布新规则版本（D-14a、D-18、D-19、收款说明）
+      description: 只追加；effectiveFrom 不早于当前时间。已下单的订单保留下单时的快照（R-09.9）。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RulesInput'}
+      responses:
+        '201':
+          description: 新规则版本
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RulesVersion'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Invalid'}
+
+  # ==========================================================================
+  # 管理端：用户
+  # ==========================================================================
+  /admin-api/users:
+    get:
+      operationId: adminListUsers
+      tags: [admin-users]
+      summary: 用户列表
+      security: [{adminSession: []}]
+      parameters:
+        - {name: q, in: query, description: 按邮箱或用户 ID 搜索, schema: {type: string}}
+        - {name: status, in: query, schema: {type: string, enum: [unverified, active, banned]}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 一页用户
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminUserPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: adminCreateUser
+      tags: [admin-users]
+      summary: 代建用户（P0a）
+      description: 只建邮箱，不设密码；系统给该邮箱发送设置密码的验证码，用户用 confirmPasswordReset 设置密码并完成验证（R-15.1）。邮箱已存在返回 409。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EmailRequiredInput'}
+      responses:
+        '201':
+          description: 新用户
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminUser'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/users/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    get:
+      operationId: adminGetUser
+      tags: [admin-users]
+      summary: 用户详情（订阅与订单）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 用户
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminUserDetail'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/users/{userId}/ban:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      operationId: adminBanUser
+      tags: [admin-users]
+      summary: 封禁（撤销会话并停用其全部订阅）
+      description: 封禁不改变权益与期限；订阅阻断原因出现 account_banned，≤ 1 秒关闭全部连接（R-13.8）。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReasonInput'}
+      responses:
+        '200':
+          description: 用户
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminUser'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/users/{userId}/unban:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      operationId: adminUnbanUser
+      tags: [admin-users]
+      summary: 解除封禁
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200':
+          description: 用户
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminUser'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/users/{userId}/password-reset-email:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      operationId: adminSendPasswordReset
+      tags: [admin-users]
+      summary: 发起重设密码邮件（管理员不能查看或设置用户密码，R-15.5）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204': {description: 已发送}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  # ==========================================================================
+  # 管理端：订单与账务
+  # ==========================================================================
+  /admin-api/orders:
+    get:
+      operationId: adminListOrders
+      tags: [admin-orders]
+      summary: 订单列表（待核款置顶）
+      security: [{adminSession: []}]
+      parameters:
+        - name: payment
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/PaymentStatus'}
+        - name: fulfillment
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/FulfillmentStatus'}
+        - {name: kind, in: query, schema: {$ref: '#/components/schemas/OrderKind'}}
+        - {name: userId, in: query, schema: {type: string}}
+        - {name: subscriptionId, in: query, schema: {type: string}}
+        - {name: q, in: query, description: 按订单号、付款识别码、用户邮箱搜索, schema: {type: string}}
+        - {name: createdFrom, in: query, schema: {type: string, format: date-time}}
+        - {name: createdTo, in: query, schema: {type: string, format: date-time}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 一页订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminOrderPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: adminCreateOrder
+      tags: [admin-orders]
+      summary: 为用户代下单（续时长、买流量等）
+      description: 与自助下单同样校验，但不受“未付款新购上限”以外的前台限制；新购请用 adminCreateSubscription。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdminCreateOrderInput'}
+      responses:
+        '201':
+          description: 新订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminOrder'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/orders/{orderId}:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    get:
+      operationId: adminGetOrder
+      tags: [admin-orders]
+      summary: 订单详情（含收款记录、入账条目、退款）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminOrder'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/orders/{orderId}/payment-confirmation:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    post:
+      operationId: adminConfirmPayment
+      tags: [admin-orders]
+      summary: 确认收款（以订单号为业务键，幂等）
+      description: |
+        确认与入账在同一事务内、以订单为唯一业务键执行一次（R-09.3）：并发点击、超时重试都只入账一次，重复确认返回 200 与已有记录；
+        请求体与已有记录不同（金额、流水号）返回 409。金额必须等于订单金额，否则 422。
+        订单已取消/超时（晚到款，R-16.6）时必须 lateArrival = true，确认后进入可审计的人工处置（重新履约或退款）。
+        新购确认后创建订阅（待履约）并启动履约；续购确认后两项权益各自入账（R-18 含流量续费）。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConfirmPaymentInput'}
+      responses:
+        '200':
+          description: 订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminOrder'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/orders/{orderId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    post:
+      operationId: adminCancelOrder
+      tags: [admin-orders]
+      summary: 取消待核款订单（释放库存预留）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReasonInput'}
+      responses:
+        '200':
+          description: 订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminOrder'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/orders/{orderId}/fulfillment-retry:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    post:
+      operationId: adminRetryOrderFulfillment
+      tags: [admin-orders]
+      summary: 重试“已收款，交付异常”的订单
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/FulfillmentInput'}
+      responses:
+        '200':
+          description: 订单
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminOrder'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/orders/{orderId}/refunds:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    post:
+      operationId: adminRequestRefund
+      tags: [admin-orders]
+      summary: 发起退款复核（R-09.6）
+      description: |
+        订单收款状态进入 refund_review；同一订单同时只有一个待复核退款（409）。reclaimBytes / reclaimSeconds 为批准时要回收的剩余权益，
+        不能超过订阅当前剩余（412），不能制造负余额。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RefundInput'}
+      responses:
+        '201':
+          description: 退款
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Refund'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/refunds:
+    get:
+      operationId: adminListRefunds
+      tags: [admin-orders]
+      summary: 退款列表
+      security: [{adminSession: []}]
+      parameters:
+        - {name: status, in: query, schema: {type: string, enum: [review, approved, rejected]}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 一页退款
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RefundPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /admin-api/refunds/{refundId}/decision:
+    parameters:
+      - {name: refundId, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: adminDecideRefund
+      tags: [admin-orders]
+      summary: 批准或驳回退款
+      description: 批准时追加负向账本条目（source_type = refund）回收剩余权益，订单收款状态变为 refunded；驳回时回到 confirmed。重复决定返回 409。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RefundDecisionInput'}
+      responses:
+        '200':
+          description: 退款
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Refund'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+
+  # ==========================================================================
+  # 管理端：换出口申请
+  # ==========================================================================
+  /admin-api/exit-requests:
+    get:
+      operationId: adminListExitRequests
+      tags: [admin-exit-requests]
+      summary: 换出口申请列表
+      security: [{adminSession: []}]
+      parameters:
+        - name: status
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/ExitRequestStatus'}
+        - {name: feeStatus, in: query, schema: {$ref: '#/components/schemas/ExitFeeStatus'}}
+        - {name: subscriptionId, in: query, schema: {type: string}}
+        - {name: userId, in: query, schema: {type: string}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 一页申请
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminExitRequestPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /admin-api/exit-requests/{exitRequestId}:
+    parameters:
+      - $ref: '#/components/parameters/ExitRequestId'
+    get:
+      operationId: adminGetExitRequest
+      tags: [admin-exit-requests]
+      summary: 申请详情
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 申请
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminExitRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: adminUpdateExitRequestNote
+      tags: [admin-exit-requests]
+      summary: 修改内部备注（客户不可见）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InternalNoteInput'}
+      responses:
+        '200':
+          description: 申请
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminExitRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/exit-requests/{exitRequestId}/accept:
+    parameters:
+      - $ref: '#/components/parameters/ExitRequestId'
+    post:
+      operationId: adminAcceptExitRequest
+      tags: [admin-exit-requests]
+      summary: 受理申请（free 申请直接受理；manual 申请需决定收费或免收）
+      description: |
+        D-19：超出免费次数的申请必须先在这里选择 charged（填写金额与收款参考）或 waived，才能进入处理（processing）。
+        受理后按 adminCompareExitCandidate → adminSubmitExitChange（带 exitRequestId）执行。只能受理 pending 申请（412）。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AcceptExitRequestInput'}
+      responses:
+        '200':
+          description: 申请
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminExitRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/exit-requests/{exitRequestId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ExitRequestId'
+    post:
+      operationId: adminRejectExitRequest
+      tags: [admin-exit-requests]
+      summary: 驳回申请
+      description: 申请变为 failed，failureReason 面向客户（不含供应商信息）；驳回的申请不占免费次数。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RejectExitRequestInput'}
+      responses:
+        '200':
+          description: 申请
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminExitRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+  /admin-api/exit-requests/{exitRequestId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/ExitRequestId'
+    post:
+      operationId: adminCompleteExitRequest
+      tags: [admin-exit-requests]
+      summary: 结束申请（成功或失败）
+      description: |
+        succeeded 需要 taskId 指向该订阅已成功的换出口/组合更换任务（412）；failed 需要 failureReason。
+        通常由关联任务结束时自动完成，本接口用于人工收尾。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CompleteExitRequestInput'}
+      responses:
+        '200':
+          description: 申请
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminExitRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+
+  # ==========================================================================
+  # 管理端：节点、告警、审计
+  # ==========================================================================
+  /admin-api/nodes:
+    get:
+      operationId: adminListNodes
+      tags: [admin-monitoring]
+      summary: 节点列表与状态
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 节点
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Node'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: adminCreateNode
+      tags: [admin-monitoring]
+      summary: 登记节点（预填端口池；证书由 isp-control dev-certs 或部署流程签发）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NodeInput'}
+      responses:
+        '201':
+          description: 节点
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Node'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/nodes/{nodeId}:
+    parameters:
+      - $ref: '#/components/parameters/NodeId'
+    get:
+      operationId: adminGetNode
+      tags: [admin-monitoring]
+      summary: 节点详情（配置版本、端口占用、上报新鲜度）
+      security: [{adminSession: []}]
+      responses:
+        '200':
+          description: 节点
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Node'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: adminUpdateNode
+      tags: [admin-monitoring]
+      summary: 修改节点（名称、公共域名、状态）
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NodePatch'}
+      responses:
+        '200':
+          description: 节点
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Node'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/alerts:
+    get:
+      operationId: adminListAlerts
+      tags: [admin-monitoring]
+      summary: 告警事件
+      security: [{adminSession: []}]
+      parameters:
+        - name: status
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/AlertStatus'}
+        - {name: kind, in: query, schema: {$ref: '#/components/schemas/AlertKind'}}
+        - {name: severity, in: query, schema: {$ref: '#/components/schemas/AlertSeverity'}}
+        - {name: nodeId, in: query, schema: {type: string}}
+        - {name: subscriptionId, in: query, schema: {type: string}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 一页告警
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AlertPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /admin-api/alerts/{alertId}/ack:
+    parameters:
+      - {name: alertId, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: adminAckAlert
+      tags: [admin-monitoring]
+      summary: 确认告警
+      description: 确认只表示“已知悉”；告警在条件消失时由系统自动标为 resolved。重复确认幂等。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AckInput'}
+      responses:
+        '200':
+          description: 告警
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Alert'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin-api/audit-logs:
+    get:
+      operationId: adminListAuditLogs
+      tags: [admin-monitoring]
+      summary: 操作审计查询（新的在前）
+      security: [{adminSession: []}]
+      parameters:
+        - {name: actorKind, in: query, schema: {type: string, enum: [admin, user, system, node]}}
+        - {name: adminId, in: query, schema: {type: string}}
+        - {name: userId, in: query, schema: {type: string}}
+        - {name: action, in: query, description: 精确匹配或前缀（如 order. ）, schema: {type: string}}
+        - {name: targetType, in: query, schema: {type: string}}
+        - {name: targetId, in: query, schema: {type: string}}
+        - {name: from, in: query, schema: {type: string, format: date-time}}
+        - {name: to, in: query, schema: {type: string, format: date-time}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 一页审计
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuditLogPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+components:
+  securitySchemes:
+    userSession:
+      type: apiKey
+      in: cookie
+      name: isp_session
+      description: 用户会话（HttpOnly、SameSite=Lax、生产 Secure）
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: isp_admin
+      description: 管理员会话，与用户会话分开（R-15.6）
+
+  parameters:
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: 与 isp_csrf Cookie 相同的值（双提交）
+      schema: {type: string, minLength: 16}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 客户端为每次用户意图生成的随机键（建议 UUID）；重试时复用
+      schema: {type: string, minLength: 8, maxLength: 128}
+    SubscriptionId:
+      name: subscriptionId
+      in: path
+      required: true
+      schema: {type: string}
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema: {type: string}
+    ExitRequestId:
+      name: exitRequestId
+      in: path
+      required: true
+      schema: {type: string}
+    UpstreamId:
+      name: upstreamId
+      in: path
+      required: true
+      schema: {type: string}
+    PlanId:
+      name: planId
+      in: path
+      required: true
+      schema: {type: string}
+    TrafficPackId:
+      name: trafficPackId
+      in: path
+      required: true
+      schema: {type: string}
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: {type: string}
+    NodeId:
+      name: nodeId
+      in: path
+      required: true
+      schema: {type: string}
+    Cursor:
+      name: cursor
+      in: query
+      description: 上一页响应的 nextCursor
+      schema: {type: string}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+
+  headers:
+    RetryAfter:
+      description: 可再次尝试前需要等待的秒数（rate_limited 时）
+      schema: {type: integer, minimum: 1}
+
+  responses:
+    Unauthorized:
+      description: unauthorized —— 未登录、会话过期或已撤销
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unverified:
+      description: unverified —— 邮箱尚未验证（或 CSRF 校验失败时为 forbidden）
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Forbidden:
+      description: forbidden —— 管理端权限不足（viewer 写操作）或 CSRF 校验失败
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: not_found —— 不存在或无权访问（两者不区分）
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Conflict:
+      description: conflict —— 与现有状态冲突（进行中任务、库存、版本过期、幂等键重用）
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Precondition:
+      description: precondition —— 当前状态不允许该操作
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Invalid:
+      description: invalid —— 输入不合法
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    TooManyRequests:
+      description: quota_exhausted（业务次数用完，如每 24 小时换接入 5 次）或 rate_limited（服务端限流，带 Retry-After）
+      headers:
+        Retry-After: {$ref: '#/components/headers/RetryAfter'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+
+  schemas:
+    # ---------------------------------------------------------------- 通用
+    ErrorCode:
+      type: string
+      enum: [unauthorized, unverified, forbidden, not_found, conflict, precondition, invalid, quota_exhausted, rate_limited]
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: {$ref: '#/components/schemas/ErrorCode'}
+        message: {type: string, description: 面向客户的中文说明}
+        action:
+          $ref: '#/components/schemas/ErrorAction'
+      additionalProperties: false
+    ErrorAction:
+      type: object
+      description: 可选的恢复动作，例如“去续时长”
+      required: [label, href]
+      properties:
+        label: {type: string}
+        href: {type: string}
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount: {type: integer, format: int64, minimum: 0, description: 最小货币单位（分）}
+        currency: {type: string, enum: [CNY]}
+    CountryCode:
+      type: string
+      pattern: '^[a-z]{2}$'
+      description: ISO 3166-1 alpha-2，小写，例如 us
+    Ports:
+      type: object
+      required: [http, https, socks5]
+      properties:
+        http: {type: integer, minimum: 1, maximum: 65535}
+        https: {type: integer, minimum: 1, maximum: 65535}
+        socks5: {type: integer, minimum: 1, maximum: 65535}
+    AdminRef:
+      type: object
+      required: [id, email]
+      properties:
+        id: {type: string}
+        email: {type: string}
+    UserRef:
+      type: object
+      required: [id, email]
+      properties:
+        id: {type: string}
+        email: {type: string}
+
+    # ---------------------------------------------------------------- 账号
+    Account:
+      type: object
+      required: [email, verified, status, createdAt]
+      properties:
+        email: {type: string}
+        verified: {type: boolean}
+        status: {type: string, enum: [active, banned]}
+        createdAt: {type: string, format: date-time}
+    LoginInput:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email, maxLength: 254}
+        password: {type: string, minLength: 1, maxLength: 256}
+    RegisterInput:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email, maxLength: 254}
+        password: {type: string, minLength: 10, maxLength: 256, description: 至少 10 位}
+    RegisterResult:
+      type: object
+      required: [email]
+      properties:
+        email: {type: string, description: 规范化后的邮箱}
+    VerifyEmailInput:
+      type: object
+      required: [code]
+      properties:
+        code: {type: string, pattern: '^[0-9]{6}$'}
+        email: {type: string, format: email, description: 未登录时必填}
+    EmailOnlyInput:
+      type: object
+      properties:
+        email: {type: string, format: email}
+    EmailRequiredInput:
+      type: object
+      required: [email]
+      properties:
+        email: {type: string, format: email, maxLength: 254}
+    ConfirmPasswordResetInput:
+      type: object
+      required: [email, code, newPassword]
+      properties:
+        email: {type: string, format: email}
+        code: {type: string, pattern: '^[0-9]{6}$'}
+        newPassword: {type: string, minLength: 10, maxLength: 256}
+    ChangePasswordInput:
+      type: object
+      required: [current, next]
+      properties:
+        current: {type: string, minLength: 1}
+        next: {type: string, minLength: 10, maxLength: 256}
+
+    # ---------------------------------------------------------------- 订阅（用户视图）
+    Lifecycle:
+      type: string
+      enum: [pending, fulfill_failed, active, retained, released]
+      description: 订阅生命周期（R-18 状态图；已删除的订阅不出现在用户视图）
+    Blocker:
+      type: string
+      enum: [account_banned, released, admin_paused, pending, fulfill_failed, expired, traffic_exhausted, changing, dataplane]
+      description: 阻断原因。数组按 docs/01 §7.2 展示优先级排序（即本枚举顺序）；空数组表示可用。
+    ExitCheck:
+      type: string
+      enum: [ok, slow, failed, stale]
+      description: 最近一次检测结果；stale 表示检测结果已过期（超过检测间隔两倍未更新）
+    Exit:
+      type: object
+      required: [version, ip, countryCode, country, city, check, latencyMs, checkedAt]
+      properties:
+        version: {type: integer}
+        ip: {type: string, description: 实际出口 IP（检测结果）}
+        countryCode: {$ref: '#/components/schemas/CountryCode'}
+        country: {type: string}
+        city: {type: string}
+        check: {$ref: '#/components/schemas/ExitCheck'}
+        latencyMs: {type: [integer, 'null']}
+        checkedAt: {type: string, format: date-time}
+    AccessField:
+      type: string
+      enum: [ports, password]
+    Access:
+      type: object
+      required: [version, host, username, password, ports, issuedAt, unseenChanges]
+      properties:
+        version: {type: integer}
+        host: {type: string}
+        username: {type: string}
+        password: {type: string, description: 接入密码明文（本人查看；普通页面应隐藏显示）}
+        ports: {$ref: '#/components/schemas/Ports'}
+        issuedAt: {type: string, format: date-time}
+        unseenChanges:
+          type: array
+          description: 最近一次换接入改动、用户尚未确认的字段（服务端保存）
+          items: {$ref: '#/components/schemas/AccessField'}
+    SubscriptionPlan:
+      type: object
+      required: [name, countryCode, country, city, concurrency, bandwidthMbps]
+      properties:
+        name: {type: string}
+        countryCode: {$ref: '#/components/schemas/CountryCode'}
+        country: {type: string}
+        city: {type: string}
+        concurrency: {type: integer}
+        bandwidthMbps: {type: integer}
+    SubscriptionTime:
+      type: object
+      required: [periodDays, startedAt, expiresAt, remainingSeconds, retentionEndsAt]
+      properties:
+        periodDays: {type: integer, description: 已购时长合计（天）}
+        startedAt: {type: [string, 'null'], format: date-time, description: 首次就绪（起算）时间}
+        expiresAt: {type: [string, 'null'], format: date-time}
+        remainingSeconds: {type: integer, minimum: 0, description: 按服务端时钟计算的剩余秒数}
+        retentionEndsAt: {type: [string, 'null'], format: date-time}
+    SubscriptionTraffic:
+      type: object
+      required: [totalBytes, usedBytes]
+      properties:
+        totalBytes: {type: integer, format: int64, minimum: 0, description: 流量账本合计}
+        usedBytes: {type: integer, format: int64, minimum: 0, description: 累计已用（可能短暂大于 totalBytes，透支 ≤ 1 MB）}
+    SubscriptionQuotas:
+      type: object
+      required: [accessChangesLeft, accessChangesPerDay, freeExitChangesLeft, freeExitWindowEndsAt]
+      properties:
+        accessChangesLeft: {type: integer, minimum: 0, description: 滚动 24 小时内剩余自助换接入次数}
+        accessChangesPerDay: {type: integer}
+        freeExitChangesLeft: {type: integer, minimum: 0}
+        freeExitWindowEndsAt: {type: [string, 'null'], format: date-time, description: 免费次数恢复时间（已用完时）}
+    Subscription:
+      type: object
+      required: [id, name, plan, lifecycle, blockers, time, traffic, exit, access, quotas, openExitRequestId, openOrderIds]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        plan: {$ref: '#/components/schemas/SubscriptionPlan'}
+        lifecycle: {$ref: '#/components/schemas/Lifecycle'}
+        blockers:
+          type: array
+          items: {$ref: '#/components/schemas/Blocker'}
+        time: {$ref: '#/components/schemas/SubscriptionTime'}
+        traffic: {$ref: '#/components/schemas/SubscriptionTraffic'}
+        exit:
+          oneOf:
+            - {$ref: '#/components/schemas/Exit'}
+            - {type: 'null'}
+        access:
+          oneOf:
+            - {$ref: '#/components/schemas/Access'}
+            - {type: 'null'}
+        quotas: {$ref: '#/components/schemas/SubscriptionQuotas'}
+        openExitRequestId: {type: [string, 'null']}
+        openOrderIds:
+          type: array
+          items: {type: string}
+    SubscriptionEventKind:
+      type: string
+      enum: [ready, time_added, traffic_added, password_reset, access_changed, exit_changed, expired, exhausted, renamed]
+    SubscriptionEvent:
+      type: object
+      required: [id, at, kind, detail]
+      properties:
+        id: {type: string}
+        at: {type: string, format: date-time}
+        kind: {$ref: '#/components/schemas/SubscriptionEventKind'}
+        detail: {type: string}
+        orderNo: {type: string}
+    RenameInput:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 24}
+    ChangeAccessInput:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [password, ports_and_password]
+          description: password 只重置密码（端口与用户名不变）；ports_and_password 更换端口组、用户名与密码
+
+    # ---------------------------------------------------------------- 目录
+    StockLevel:
+      type: string
+      enum: [plenty, low, out]
+    Plan:
+      type: object
+      required: [id, versionId, countryCode, country, city, monthlyPrice, includedBytes, concurrency, bandwidthMbps, stock]
+      properties:
+        id: {type: string}
+        versionId: {type: string, description: 当前价格版本，下单时可回传用于校验}
+        countryCode: {$ref: '#/components/schemas/CountryCode'}
+        country: {type: string}
+        city: {type: string}
+        monthlyPrice: {$ref: '#/components/schemas/Money'}
+        includedBytes: {type: integer, format: int64, description: 每个月包含的流量}
+        concurrency: {type: integer}
+        bandwidthMbps: {type: integer}
+        stock: {$ref: '#/components/schemas/StockLevel'}
+    TrafficPack:
+      type: object
+      required: [id, versionId, bytes, price]
+      properties:
+        id: {type: string}
+        versionId: {type: string}
+        bytes: {type: integer, format: int64}
+        price: {$ref: '#/components/schemas/Money'}
+    Rules:
+      type: object
+      required: [version, periodDays, retentionDays, accessChangesPerDay, freeExitChangesPer30Days, unpaidHoldHours, maxUnpaidNewOrders]
+      properties:
+        version: {type: string}
+        periodDays: {type: integer}
+        retentionDays: {type: integer}
+        accessChangesPerDay: {type: integer}
+        freeExitChangesPer30Days: {type: integer}
+        unpaidHoldHours: {type: integer}
+        maxUnpaidNewOrders: {type: integer}
+    PaymentInstructions:
+      type: object
+      required: [payee, bank, account, note]
+      properties:
+        payee: {type: string}
+        bank: {type: string}
+        account: {type: string}
+        note: {type: string}
+    Catalog:
+      type: object
+      required: [plans, trafficPacks, monthOptions, rules, payment]
+      properties:
+        plans:
+          type: array
+          items: {$ref: '#/components/schemas/Plan'}
+        trafficPacks:
+          type: array
+          items: {$ref: '#/components/schemas/TrafficPack'}
+        monthOptions:
+          type: array
+          items: {type: integer}
+        rules: {$ref: '#/components/schemas/Rules'}
+        payment: {$ref: '#/components/schemas/PaymentInstructions'}
+
+    # ---------------------------------------------------------------- 订单（用户视图）
+    OrderKind:
+      type: string
+      enum: [new, renew_time, add_traffic]
+      description: 含流量续费 = renew_time 且带流量包行（两项各自入账）
+    PaymentStatus:
+      type: string
+      enum: [awaiting, confirmed, cancelled, refund_review, refunded]
+    FulfillmentStatus:
+      type: string
+      enum: [not_started, processing, delivered, failed]
+    OrderLine:
+      type: object
+      required: [label, detail, amount]
+      properties:
+        label: {type: string}
+        detail: {type: string}
+        amount: {$ref: '#/components/schemas/Money'}
+    OrderStep:
+      type: object
+      required: [label, state, at]
+      properties:
+        label: {type: string}
+        state: {type: string, enum: [done, current, todo, failed]}
+        at: {type: [string, 'null'], format: date-time}
+    Order:
+      type: object
+      required: [id, no, kind, createdAt, holdUntil, amount, payment, fulfillment, userClaimedPaidAt, payRef,
+                 subscriptionId, subscriptionName, lines, steps, rulesSnapshot]
+      properties:
+        id: {type: string}
+        no: {type: string, description: 人读订单号，如 ORD-20261107-0041}
+        kind: {$ref: '#/components/schemas/OrderKind'}
+        createdAt: {type: string, format: date-time}
+        holdUntil: {type: [string, 'null'], format: date-time, description: 未付款保留截止（含库存预留）}
+        amount: {$ref: '#/components/schemas/Money'}
+        payment: {$ref: '#/components/schemas/PaymentStatus'}
+        fulfillment: {$ref: '#/components/schemas/FulfillmentStatus'}
+        userClaimedPaidAt: {type: [string, 'null'], format: date-time}
+        payRef: {type: string, description: 付款识别码，转账附言填写}
+        subscriptionId: {type: [string, 'null']}
+        subscriptionName: {type: [string, 'null']}
+        lines:
+          type: array
+          items: {$ref: '#/components/schemas/OrderLine'}
+        steps:
+          type: array
+          items: {$ref: '#/components/schemas/OrderStep'}
+        rulesSnapshot:
+          type: array
+          description: 下单时保存的规则说明，套餐改价或下架不追溯（R-09.9）
+          items: {type: string}
+    OrderInputNew:
+      type: object
+      required: [kind, planId, months, quantity]
+      properties:
+        kind: {type: string, enum: [new]}
+        planId: {type: string}
+        planVersionId: {type: string, description: 可选；与当前版本不符时 409（价格已变化）}
+        months: {type: integer, minimum: 1, description: 必须是 catalog.monthOptions 之一}
+        quantity: {type: integer, minimum: 1, maximum: 1, description: 一次订单一个订阅（D-13），只能为 1}
+    OrderInputRenewTime:
+      type: object
+      required: [kind, subscriptionId, months]
+      properties:
+        kind: {type: string, enum: [renew_time]}
+        subscriptionId: {type: string}
+        months: {type: integer, minimum: 1}
+        packId: {type: string, description: 可选；同时买流量包即“含流量续费”}
+        packVersionId: {type: string}
+    OrderInputAddTraffic:
+      type: object
+      required: [kind, subscriptionId, packId]
+      properties:
+        kind: {type: string, enum: [add_traffic]}
+        subscriptionId: {type: string}
+        packId: {type: string}
+        packVersionId: {type: string}
+    OrderInput:
+      oneOf:
+        - {$ref: '#/components/schemas/OrderInputNew'}
+        - {$ref: '#/components/schemas/OrderInputRenewTime'}
+        - {$ref: '#/components/schemas/OrderInputAddTraffic'}
+      discriminator:
+        propertyName: kind
+        mapping:
+          new: '#/components/schemas/OrderInputNew'
+          renew_time: '#/components/schemas/OrderInputRenewTime'
+          add_traffic: '#/components/schemas/OrderInputAddTraffic'
+
+    # ---------------------------------------------------------------- 换出口申请（用户视图）
+    ExitReason:
+      type: string
+      enum: [target_blocked, quality, region, other]
+    ExitRequestStatus:
+      type: string
+      enum: [pending, processing, succeeded, failed, cancelled]
+    ExitRequest:
+      type: object
+      required: [id, no, subscriptionId, subscriptionName, createdAt, updatedAt, reason, note, alsoChangeAccess, charge,
+                 status, oldIp, newIp, failureReason]
+      properties:
+        id: {type: string}
+        no: {type: string, description: 人读申请号，如 REQ-1107-0008}
+        subscriptionId: {type: string}
+        subscriptionName: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        reason: {$ref: '#/components/schemas/ExitReason'}
+        note: {type: string}
+        alsoChangeAccess: {type: boolean}
+        charge: {type: string, enum: [free, manual], description: manual = 超出免费次数，需管理员确认收费}
+        status: {$ref: '#/components/schemas/ExitRequestStatus'}
+        oldIp: {type: string}
+        newIp: {type: [string, 'null']}
+        failureReason: {type: [string, 'null'], description: 面向客户}
+    ExitRequestInput:
+      type: object
+      required: [subscriptionId, reason, note, alsoChangeAccess]
+      properties:
+        subscriptionId: {type: string}
+        reason: {$ref: '#/components/schemas/ExitReason'}
+        note: {type: string, maxLength: 200}
+        alsoChangeAccess: {type: boolean}
+    ExitRequestConflict:
+      allOf:
+        - {$ref: '#/components/schemas/Error'}
+        - type: object
+          required: [existing]
+          properties:
+            existing: {$ref: '#/components/schemas/ExitRequest'}
+
+    # ---------------------------------------------------------------- 管理端：登录
+    AdminRole:
+      type: string
+      enum: [admin, viewer]
+    Admin:
+      type: object
+      required: [id, email, displayName, role, totpEnrolled, lastLoginAt]
+      properties:
+        id: {type: string}
+        email: {type: string}
+        displayName: {type: string}
+        role: {$ref: '#/components/schemas/AdminRole'}
+        totpEnrolled: {type: boolean}
+        lastLoginAt: {type: [string, 'null'], format: date-time}
+    AdminLoginChallenge:
+      type: object
+      required: [stage]
+      properties:
+        stage: {type: string, enum: [totp_required, enrollment_required]}
+        enrollment:
+          type: object
+          description: 仅 enrollment_required 时出现；密钥只在本次响应中返回
+          required: [secret, otpauthUri]
+          properties:
+            secret: {type: string, description: Base32 TOTP 密钥}
+            otpauthUri: {type: string, description: 'otpauth://totp/...，供生成二维码'}
+    AdminMfaInput:
+      type: object
+      description: code 与 recoveryCode 二选一；首次绑定只能用 code
+      properties:
+        code: {type: string, pattern: '^[0-9]{6}$'}
+        recoveryCode: {type: string, minLength: 8, maxLength: 32}
+    TotpCodeInput:
+      type: object
+      required: [code]
+      properties:
+        code: {type: string, pattern: '^[0-9]{6}$'}
+    RecoveryCodes:
+      type: object
+      required: [codes]
+      properties:
+        codes:
+          type: array
+          items: {type: string}
+    AdminSession:
+      type: object
+      required: [admin]
+      properties:
+        admin: {$ref: '#/components/schemas/Admin'}
+        recoveryCodes:
+          type: array
+          description: 仅首次绑定 TOTP 时返回，只显示这一次
+          items: {type: string}
+
+    # ---------------------------------------------------------------- 管理端：概览
+    Overview:
+      type: object
+      required: [generatedAt, dataAt, subscriptions, traffic, orders, exitRequests, alerts, nodes]
+      properties:
+        generatedAt: {type: string, format: date-time}
+        dataAt: {type: [string, 'null'], format: date-time, description: 最近一次节点上报时间（连接与速率的数据时间）}
+        subscriptions:
+          type: object
+          required: [total, usable, exhausted, expired, paused, pending, fulfillFailed, changing, dataplane, released]
+          properties:
+            total: {type: integer, description: 不含已删除}
+            usable: {type: integer}
+            exhausted: {type: integer}
+            expired: {type: integer, description: 保留期内}
+            paused: {type: integer}
+            pending: {type: integer}
+            fulfillFailed: {type: integer}
+            changing: {type: integer}
+            dataplane: {type: integer, description: 数据面异常}
+            released: {type: integer}
+        traffic:
+          type: object
+          required: [currentConns, rateBps, todayBytes, totalBytes]
+          properties:
+            currentConns: {type: [integer, 'null'], description: 无新鲜上报时为 null}
+            rateBps: {type: [integer, 'null'], format: int64}
+            todayBytes: {type: integer, format: int64, description: Asia/Shanghai 当日}
+            totalBytes: {type: integer, format: int64}
+        orders:
+          type: object
+          required: [awaitingPayment, awaitingFulfillment, fulfillFailed, refundReview]
+          properties:
+            awaitingPayment: {type: integer}
+            awaitingFulfillment: {type: integer}
+            fulfillFailed: {type: integer}
+            refundReview: {type: integer}
+        exitRequests:
+          type: object
+          required: [pending, awaitingFeeDecision, processing]
+          properties:
+            pending: {type: integer}
+            awaitingFeeDecision: {type: integer}
+            processing: {type: integer}
+        alerts:
+          type: object
+          required: [open, critical]
+          properties:
+            open: {type: integer}
+            critical: {type: integer}
+        nodes:
+          type: object
+          required: [online, offline]
+          properties:
+            online: {type: integer}
+            offline: {type: integer}
+
+    # ---------------------------------------------------------------- 管理端：订阅
+    AdminLifecycle:
+      type: string
+      enum: [pending, fulfill_failed, active, retained, released, deleted]
+    AdminExit:
+      type: object
+      description: 当前出口（含资源与供应商信息，只给管理端）
+      required: [bindingId, version, resourceId, provider, upstreamProtocol, upstreamAddr, verifiedIp, ip, countryCode,
+                 country, city, check, latencyMs, checkedAt, checkError, boundAt]
+      properties:
+        bindingId: {type: string}
+        version: {type: integer}
+        resourceId: {type: string}
+        provider: {type: string}
+        upstreamProtocol: {type: string, enum: [http, https, socks5]}
+        upstreamAddr: {type: string, description: host:port，不含凭据}
+        verifiedIp: {type: [string, 'null'], description: 切换前验证得到的出口（平台内独占判据）}
+        ip: {type: [string, 'null'], description: 最近一次检测的出口}
+        countryCode: {anyOf: [{$ref: '#/components/schemas/CountryCode'}, {type: 'null'}]}
+        country: {type: string}
+        city: {type: string}
+        check: {anyOf: [{$ref: '#/components/schemas/ExitCheck'}, {type: 'null'}]}
+        latencyMs: {type: [integer, 'null']}
+        checkedAt: {type: [string, 'null'], format: date-time}
+        checkError: {type: [string, 'null']}
+        boundAt: {type: [string, 'null'], format: date-time}
+    AdminAccess:
+      type: object
+      description: 当前接入（不含密码；明文需 adminRevealAccess）
+      required: [id, version, state, host, username, ports, issuedAt, activatedAt]
+      properties:
+        id: {type: string}
+        version: {type: integer}
+        state: {$ref: '#/components/schemas/AccessState'}
+        host: {type: string}
+        username: {type: string}
+        ports: {$ref: '#/components/schemas/Ports'}
+        issuedAt: {type: string, format: date-time}
+        activatedAt: {type: [string, 'null'], format: date-time}
+    AccessState:
+      type: string
+      enum: [pending, active, revoked, failed]
+    AdminSubscription:
+      type: object
+      required: [id, name, user, nodeId, plan, lifecycle, blockers, adminPaused, pausedReason, time, traffic, exit, access,
+                 activeConns, usageReportedAt, desiredVersion, appliedVersion, activeTaskId, openExitRequestId, openOrderIds,
+                 createdAt]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        user: {$ref: '#/components/schemas/UserRef'}
+        nodeId: {type: [string, 'null']}
+        plan:
+          allOf:
+            - {$ref: '#/components/schemas/SubscriptionPlan'}
+            - type: object
+              required: [planId, planVersionId, planVersion]
+              properties:
+                planId: {type: string}
+                planVersionId: {type: string}
+                planVersion: {type: integer}
+        lifecycle: {$ref: '#/components/schemas/AdminLifecycle'}
+        blockers:
+          type: array
+          description: 全部阻断原因，按 docs/01 §7.2 排序
+          items: {$ref: '#/components/schemas/Blocker'}
+        adminPaused: {type: boolean}
+        pausedReason: {type: [string, 'null']}
+        time: {$ref: '#/components/schemas/SubscriptionTime'}
+        traffic:
+          allOf:
+            - {$ref: '#/components/schemas/SubscriptionTraffic'}
+            - type: object
+              required: [remainingBytes]
+              properties:
+                remainingBytes: {type: integer, format: int64, minimum: 0}
+        exit:
+          oneOf:
+            - {$ref: '#/components/schemas/AdminExit'}
+            - {type: 'null'}
+        access:
+          oneOf:
+            - {$ref: '#/components/schemas/AdminAccess'}
+            - {type: 'null'}
+        activeConns: {type: [integer, 'null'], description: 无新鲜上报时为 null（不得显示为 0）}
+        usageReportedAt: {type: [string, 'null'], format: date-time}
+        desiredVersion: {type: integer, format: int64}
+        appliedVersion: {type: integer, format: int64}
+        activeTaskId: {type: [string, 'null']}
+        openExitRequestId: {type: [string, 'null']}
+        openOrderIds:
+          type: array
+          items: {type: string}
+        createdAt: {type: string, format: date-time}
+    AdminSubscriptionDetail:
+      allOf:
+        - {$ref: '#/components/schemas/AdminSubscription'}
+        - type: object
+          required: [quotas, activeTask, rulesVersion, lifecycleReason, firstReadyAt, releasedAt, deletedAt, createdFromOrderId]
+          properties:
+            quotas: {$ref: '#/components/schemas/SubscriptionQuotas'}
+            activeTask:
+              oneOf:
+                - {$ref: '#/components/schemas/Task'}
+                - {type: 'null'}
+            rulesVersion: {type: string}
+            lifecycleReason: {type: [string, 'null']}
+            firstReadyAt: {type: [string, 'null'], format: date-time}
+            releasedAt: {type: [string, 'null'], format: date-time}
+            deletedAt: {type: [string, 'null'], format: date-time}
+            createdFromOrderId: {type: [string, 'null']}
+    AdminSubscriptionPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AdminSubscription'}
+        nextCursor: {type: [string, 'null']}
+    AdminSubscriptionEvent:
+      type: object
+      required: [id, at, kind, detail, customerVisible, orderId, taskId, actor]
+      properties:
+        id: {type: string}
+        at: {type: string, format: date-time}
+        kind:
+          type: string
+          enum: [ready, time_added, traffic_added, password_reset, access_changed, exit_changed, expired, exhausted, renamed,
+                 paused, resumed, released, deleted, adjusted, transferred, refunded, fulfill_failed, task_failed]
+        detail: {type: string}
+        customerVisible: {type: boolean}
+        orderId: {type: [string, 'null']}
+        taskId: {type: [string, 'null']}
+        actor: {$ref: '#/components/schemas/Actor'}
+    Actor:
+      type: object
+      required: [kind, id]
+      properties:
+        kind: {type: string, enum: [admin, user, system, node]}
+        id: {type: [string, 'null']}
+        email: {type: string}
+    AdminCreateSubscriptionInput:
+      type: object
+      required: [userId, planId, months, payment]
+      properties:
+        userId: {type: string}
+        planId: {type: string}
+        planVersionId: {type: string}
+        months: {type: integer, minimum: 1}
+        name: {type: string, minLength: 1, maxLength: 24}
+        nodeId: {type: string}
+        resourceId: {type: string, description: 指定可售资源；不指定则按套餐地域分配}
+        payment: {$ref: '#/components/schemas/ConfirmPaymentInput'}
+    AdminCreateSubscriptionResult:
+      type: object
+      required: [order, subscription, task]
+      properties:
+        order: {$ref: '#/components/schemas/AdminOrder'}
+        subscription: {$ref: '#/components/schemas/AdminSubscriptionDetail'}
+        task:
+          oneOf:
+            - {$ref: '#/components/schemas/Task'}
+            - {type: 'null'}
+    DeleteSubscriptionInput:
+      type: object
+      required: [reason, acknowledgeRemainingTraffic]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 500}
+        acknowledgeRemainingTraffic: {type: boolean}
+    FulfillmentInput:
+      type: object
+      properties:
+        nodeId: {type: string}
+        resourceId: {type: string}
+    AdminChangeAccessInput:
+      type: object
+      required: [mode, reason]
+      properties:
+        mode: {type: string, enum: [password, ports_and_password]}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    AccessSecret:
+      type: object
+      required: [version, host, username, password, ports]
+      properties:
+        version: {type: integer}
+        host: {type: string}
+        username: {type: string}
+        password: {type: string}
+        ports: {$ref: '#/components/schemas/Ports'}
+    AccessVersion:
+      type: object
+      required: [id, version, changeKind, state, username, ports, issuedAt, activatedAt, revokedAt, revokeReason, taskId]
+      properties:
+        id: {type: string}
+        version: {type: integer}
+        changeKind: {type: string, enum: [initial, password_reset, ports_and_password, refulfill]}
+        state: {$ref: '#/components/schemas/AccessState'}
+        username: {type: string}
+        ports: {$ref: '#/components/schemas/Ports'}
+        issuedAt: {type: string, format: date-time}
+        activatedAt: {type: [string, 'null'], format: date-time}
+        revokedAt: {type: [string, 'null'], format: date-time}
+        revokeReason: {type: [string, 'null']}
+        taskId: {type: [string, 'null']}
+    ExitBinding:
+      type: object
+      required: [id, version, state, resourceId, verifiedIp, verifiedCountryCode, check, boundAt, unboundAt, unboundReason, taskId]
+      properties:
+        id: {type: string}
+        version: {type: integer}
+        state: {type: string, enum: [pending, active, unbound, failed]}
+        resourceId: {type: string}
+        verifiedIp: {type: [string, 'null']}
+        verifiedCountryCode: {anyOf: [{$ref: '#/components/schemas/CountryCode'}, {type: 'null'}]}
+        check:
+          oneOf:
+            - {$ref: '#/components/schemas/ExitCheckResult'}
+            - {type: 'null'}
+        boundAt: {type: [string, 'null'], format: date-time}
+        unboundAt: {type: [string, 'null'], format: date-time}
+        unboundReason: {type: [string, 'null']}
+        taskId: {type: [string, 'null']}
+    ExitCheckResult:
+      type: object
+      required: [result, ip, countryCode, city, asn, latencyMs, error, checkedAt]
+      properties:
+        result: {type: string, enum: [ok, slow, failed]}
+        ip: {type: [string, 'null']}
+        countryCode: {anyOf: [{$ref: '#/components/schemas/CountryCode'}, {type: 'null'}]}
+        city: {type: [string, 'null']}
+        asn: {type: [string, 'null']}
+        latencyMs: {type: [integer, 'null']}
+        error: {type: [string, 'null']}
+        checkedAt: {type: string, format: date-time}
+    ExitCandidateInput:
+      type: object
+      required: [resourceId]
+      properties:
+        resourceId: {type: string}
+    ExitChangeInput:
+      type: object
+      required: [resourceId, compareProbeId, alsoChangeAccess, reason]
+      properties:
+        resourceId: {type: string}
+        compareProbeId: {type: string}
+        alsoChangeAccess: {type: boolean, description: 组合更换}
+        exitRequestId: {type: string}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    TaskKind:
+      type: string
+      enum: [access_change, password_reset, exit_change, combined, fulfill]
+    TaskState:
+      type: string
+      enum: [queued, running, succeeded, failed, cancelled]
+    Task:
+      type: object
+      required: [id, subscriptionId, kind, state, requestedBy, orderId, exitRequestId, newAccessVersion, newExitVersion,
+                 targetVersion, attempts, failureCode, failureReason, createdAt, startedAt, finishedAt]
+      properties:
+        id: {type: string}
+        subscriptionId: {type: string}
+        kind: {$ref: '#/components/schemas/TaskKind'}
+        state: {$ref: '#/components/schemas/TaskState'}
+        requestedBy: {$ref: '#/components/schemas/Actor'}
+        orderId: {type: [string, 'null']}
+        exitRequestId: {type: [string, 'null']}
+        newAccessVersion: {type: [integer, 'null']}
+        newExitVersion: {type: [integer, 'null']}
+        targetVersion: {type: [integer, 'null'], format: int64, description: 节点 appliedVersion 达到该值即完成}
+        attempts: {type: integer}
+        failureCode: {type: [string, 'null'], description: '如 port_in_use、exit_unverified、node_offline'}
+        failureReason: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: [string, 'null'], format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
+    ProbeKind:
+      type: string
+      enum: [exit_check, candidate_compare, upstream_verify]
+    Probe:
+      type: object
+      required: [id, kind, nodeId, subscriptionId, resourceId, status, result, observedIp, observedCountryCode, observedCity,
+                 latencyMs, error, comparison, createdAt, completedAt, deadlineAt]
+      properties:
+        id: {type: string}
+        kind: {$ref: '#/components/schemas/ProbeKind'}
+        nodeId: {type: string}
+        subscriptionId: {type: [string, 'null']}
+        resourceId: {type: [string, 'null']}
+        status: {type: string, enum: [queued, dispatched, done, expired]}
+        result: {type: [string, 'null'], enum: [ok, slow, failed, null]}
+        observedIp: {type: [string, 'null']}
+        observedCountryCode: {anyOf: [{$ref: '#/components/schemas/CountryCode'}, {type: 'null'}]}
+        observedCity: {type: [string, 'null']}
+        latencyMs: {type: [integer, 'null']}
+        error: {type: [string, 'null']}
+        comparison:
+          description: 仅 candidate_compare 完成后出现
+          oneOf:
+            - {$ref: '#/components/schemas/ExitComparison'}
+            - {type: 'null'}
+        createdAt: {type: string, format: date-time}
+        completedAt: {type: [string, 'null'], format: date-time}
+        deadlineAt: {type: string, format: date-time}
+    ExitComparison:
+      type: object
+      required: [currentIp, differsFromCurrent, uniqueOnPlatform, countryMatches, passed]
+      properties:
+        currentIp: {type: [string, 'null']}
+        differsFromCurrent: {type: boolean}
+        uniqueOnPlatform: {type: boolean}
+        countryMatches: {type: boolean}
+        passed: {type: boolean, description: 三项都为 true}
+    EntitlementKind:
+      type: string
+      enum: [time, traffic]
+    LedgerSourceType:
+      type: string
+      enum: [order, adjust, gift, compensation, refund, transfer_out, transfer_in]
+    LedgerEntry:
+      type: object
+      required: [id, subscriptionId, entitlementKind, amount, unit, sourceType, sourceId, orderId, refundId, transferId, reason,
+                 admin, createdAt]
+      properties:
+        id: {type: string}
+        subscriptionId: {type: string}
+        entitlementKind: {$ref: '#/components/schemas/EntitlementKind'}
+        amount: {type: integer, format: int64, description: 带符号；time 为秒，traffic 为字节}
+        unit: {type: string, enum: [seconds, bytes]}
+        sourceType: {$ref: '#/components/schemas/LedgerSourceType'}
+        sourceId: {type: string}
+        orderId: {type: [string, 'null']}
+        refundId: {type: [string, 'null']}
+        transferId: {type: [string, 'null']}
+        reason: {type: string}
+        admin:
+          oneOf:
+            - {$ref: '#/components/schemas/AdminRef'}
+            - {type: 'null'}
+        createdAt: {type: string, format: date-time}
+    Ledger:
+      type: object
+      required: [entries, entitledBytesTotal, usedBytesTotal, entitledSecondsTotal]
+      properties:
+        entries:
+          type: array
+          items: {$ref: '#/components/schemas/LedgerEntry'}
+        entitledBytesTotal: {type: integer, format: int64}
+        usedBytesTotal: {type: integer, format: int64}
+        entitledSecondsTotal: {type: integer, format: int64}
+    LedgerEntryInput:
+      type: object
+      required: [sourceType, entitlementKind, amount, reason]
+      properties:
+        sourceType: {type: string, enum: [adjust, gift, compensation]}
+        entitlementKind: {$ref: '#/components/schemas/EntitlementKind'}
+        amount: {type: integer, format: int64, description: 非零；gift / compensation 必须为正}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    TransferInput:
+      type: object
+      required: [fromSubscriptionId, toSubscriptionId, reason]
+      properties:
+        fromSubscriptionId: {type: string}
+        toSubscriptionId: {type: string}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    Transfer:
+      type: object
+      required: [id, userId, fromSubscriptionId, toSubscriptionId, bytes, reason, admin, createdAt]
+      properties:
+        id: {type: string}
+        userId: {type: string}
+        fromSubscriptionId: {type: string}
+        toSubscriptionId: {type: string}
+        bytes: {type: integer, format: int64}
+        reason: {type: string}
+        admin: {$ref: '#/components/schemas/AdminRef'}
+        createdAt: {type: string, format: date-time}
+    UsageSeries:
+      type: object
+      required: [subscriptionId, source, unit, bucketSeconds, from, to, lastSampleAt, freshness, points]
+      properties:
+        subscriptionId: {type: string}
+        source: {type: string, enum: [agent_report], description: 节点上报的累计值差分}
+        unit: {type: string, enum: [bytes]}
+        bucketSeconds: {type: integer}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        lastSampleAt: {type: [string, 'null'], format: date-time}
+        freshness:
+          type: string
+          enum: [fresh, stale, no_data]
+          description: fresh = 最近 15 秒内有上报；stale = 有历史数据但上报已中断；no_data = 区间内没有任何样本
+        points:
+          type: array
+          items: {$ref: '#/components/schemas/UsagePoint'}
+    UsagePoint:
+      type: object
+      required: [at, bytes, maxConns, samples, sampledAt]
+      properties:
+        at: {type: string, format: date-time, description: 桶起点}
+        bytes: {type: [integer, 'null'], format: int64, description: 桶内用量；null = 没有样本（断联或无数据），0 = 真实零值}
+        maxConns: {type: [integer, 'null']}
+        samples: {type: integer, description: 桶内样本数}
+        sampledAt: {type: [string, 'null'], format: date-time, description: 桶内最后一个样本的节点时间}
+
+    # ---------------------------------------------------------------- 管理端：上游资源
+    UpstreamStatus:
+      type: string
+      enum: [pending_verify, available, reserved, bound, cooldown, quarantine, retired]
+      description: 待验证、可售、已预留、已占用、冷却、异常隔离、停用（R-16.3）
+    Upstream:
+      type: object
+      required: [id, nodeId, protocol, host, port, username, hasPassword, countryCode, country, city, provider, note, status,
+                 statusReason, reservedOrderId, reservedTaskId, reservedUntil, boundSubscriptionId, cooldownUntil, lastVerify,
+                 rowVersion, createdAt, updatedAt]
+      properties:
+        id: {type: string}
+        nodeId: {type: string}
+        protocol: {type: string, enum: [http, https, socks5]}
+        host: {type: string}
+        port: {type: integer}
+        username: {type: string}
+        hasPassword: {type: boolean, description: 密码加密保存，任何接口都不返回明文}
+        countryCode: {$ref: '#/components/schemas/CountryCode'}
+        country: {type: string}
+        city: {type: string}
+        provider: {type: string}
+        note: {type: string}
+        status: {$ref: '#/components/schemas/UpstreamStatus'}
+        statusReason: {type: [string, 'null']}
+        reservedOrderId: {type: [string, 'null']}
+        reservedTaskId: {type: [string, 'null']}
+        reservedUntil: {type: [string, 'null'], format: date-time}
+        boundSubscriptionId: {type: [string, 'null']}
+        cooldownUntil: {type: [string, 'null'], format: date-time}
+        lastVerify:
+          oneOf:
+            - {$ref: '#/components/schemas/UpstreamVerify'}
+            - {type: 'null'}
+        rowVersion: {type: integer, format: int64}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    UpstreamVerify:
+      type: object
+      required: [at, ok, exitIp, exitCountryCode, error]
+      properties:
+        at: {type: string, format: date-time}
+        ok: {type: boolean}
+        exitIp: {type: [string, 'null']}
+        exitCountryCode: {anyOf: [{$ref: '#/components/schemas/CountryCode'}, {type: 'null'}]}
+        error: {type: [string, 'null']}
+    UpstreamInput:
+      type: object
+      required: [nodeId, countryCode, country, city]
+      properties:
+        url: {type: string, description: 'socks5://user:pass@host:port 等，凭据可 URL 编码'}
+        protocol: {type: string, enum: [http, https, socks5]}
+        host: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        username: {type: string}
+        password: {type: string, writeOnly: true}
+        nodeId: {type: string}
+        countryCode: {$ref: '#/components/schemas/CountryCode'}
+        country: {type: string}
+        city: {type: string}
+        provider: {type: string}
+        note: {type: string}
+    UpstreamPatch:
+      type: object
+      required: [rowVersion]
+      properties:
+        rowVersion: {type: integer, format: int64}
+        protocol: {type: string, enum: [http, https, socks5]}
+        host: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        username: {type: string}
+        password: {type: string, writeOnly: true, description: 不传表示不改}
+        countryCode: {$ref: '#/components/schemas/CountryCode'}
+        country: {type: string}
+        city: {type: string}
+        provider: {type: string}
+        note: {type: string}
+    UpstreamStatusInput:
+      type: object
+      required: [status, reason]
+      properties:
+        status: {type: string, enum: [available, quarantine, retired]}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    UpstreamPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Upstream'}
+        nextCursor: {type: [string, 'null']}
+
+    # ---------------------------------------------------------------- 管理端：套餐、流量包、规则
+    SaleStatus:
+      type: string
+      enum: [draft, on_sale, off_sale]
+    SaleStatusInput:
+      type: object
+      required: [status]
+      properties:
+        status: {$ref: '#/components/schemas/SaleStatus'}
+    PlanVersion:
+      type: object
+      required: [id, version, name, countryCode, country, city, price, periodDays, includedBytes, concurrency, bandwidthMbps,
+                 createdAt, createdBy]
+      properties:
+        id: {type: string}
+        version: {type: integer}
+        name: {type: string}
+        countryCode: {$ref: '#/components/schemas/CountryCode'}
+        country: {type: string}
+        city: {type: string}
+        price: {$ref: '#/components/schemas/Money'}
+        periodDays: {type: integer}
+        includedBytes: {type: integer, format: int64}
+        concurrency: {type: integer}
+        bandwidthMbps: {type: integer}
+        createdAt: {type: string, format: date-time}
+        createdBy:
+          oneOf:
+            - {$ref: '#/components/schemas/AdminRef'}
+            - {type: 'null'}
+    PlanVersionInput:
+      type: object
+      required: [name, countryCode, country, city, price, periodDays, includedBytes, concurrency, bandwidthMbps]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 64}
+        countryCode: {$ref: '#/components/schemas/CountryCode'}
+        country: {type: string}
+        city: {type: string}
+        price: {$ref: '#/components/schemas/Money'}
+        periodDays: {type: integer, minimum: 1}
+        includedBytes: {type: integer, format: int64, minimum: 0}
+        concurrency: {type: integer, minimum: 1}
+        bandwidthMbps: {type: integer, minimum: 1}
+    PlanStock:
+      type: object
+      required: [available, reserved, bound, level]
+      properties:
+        available: {type: integer}
+        reserved: {type: integer}
+        bound: {type: integer}
+        level: {$ref: '#/components/schemas/StockLevel'}
+    AdminPlan:
+      type: object
+      required: [id, code, status, sortOrder, current, stock, versions]
+      properties:
+        id: {type: string}
+        code: {type: string}
+        status: {$ref: '#/components/schemas/SaleStatus'}
+        sortOrder: {type: integer}
+        current: {$ref: '#/components/schemas/PlanVersion'}
+        stock: {$ref: '#/components/schemas/PlanStock'}
+        versions:
+          type: array
+          description: 列表接口只含当前版本；详情接口含全部版本（新的在前）
+          items: {$ref: '#/components/schemas/PlanVersion'}
+    PlanCreateInput:
+      type: object
+      required: [code, version]
+      properties:
+        code: {type: string, pattern: '^[a-z0-9][a-z0-9-]{1,31}$'}
+        sortOrder: {type: integer}
+        version: {$ref: '#/components/schemas/PlanVersionInput'}
+    TrafficPackVersion:
+      type: object
+      required: [id, version, bytes, price, createdAt, createdBy]
+      properties:
+        id: {type: string}
+        version: {type: integer}
+        bytes: {type: integer, format: int64}
+        price: {$ref: '#/components/schemas/Money'}
+        createdAt: {type: string, format: date-time}
+        createdBy:
+          oneOf:
+            - {$ref: '#/components/schemas/AdminRef'}
+            - {type: 'null'}
+    TrafficPackVersionInput:
+      type: object
+      required: [bytes, price]
+      properties:
+        bytes: {type: integer, format: int64, minimum: 1}
+        price: {$ref: '#/components/schemas/Money'}
+    AdminTrafficPack:
+      type: object
+      required: [id, code, status, sortOrder, current, versions]
+      properties:
+        id: {type: string}
+        code: {type: string}
+        status: {$ref: '#/components/schemas/SaleStatus'}
+        sortOrder: {type: integer}
+        current: {$ref: '#/components/schemas/TrafficPackVersion'}
+        versions:
+          type: array
+          items: {$ref: '#/components/schemas/TrafficPackVersion'}
+    TrafficPackCreateInput:
+      type: object
+      required: [code, version]
+      properties:
+        code: {type: string, pattern: '^[a-z0-9][a-z0-9-]{1,31}$'}
+        sortOrder: {type: integer}
+        version: {$ref: '#/components/schemas/TrafficPackVersionInput'}
+    RulesInput:
+      type: object
+      required: [version, effectiveFrom, periodDays, retentionDays, portCooldownDays, resourceCooldownDays, accessChangesPerWindow,
+                 accessChangeWindowHours, freeExitChangesPerWindow, exitChangeWindowDays, unpaidHoldHours, maxUnpaidNewOrders,
+                 monthOptions, payment, snapshotLines]
+      properties:
+        version: {type: string, pattern: '^R-[0-9]{4}-[0-9]{2}-[0-9]{2}(\.[0-9]+)?$'}
+        effectiveFrom: {type: string, format: date-time}
+        periodDays: {type: integer, minimum: 1}
+        retentionDays: {type: integer, minimum: 0, description: D-14a}
+        portCooldownDays: {type: integer, minimum: 0, description: D-18}
+        resourceCooldownDays: {type: integer, minimum: 0}
+        accessChangesPerWindow: {type: integer, minimum: 0, description: D-18 自助换接入次数}
+        accessChangeWindowHours: {type: integer, minimum: 1}
+        freeExitChangesPerWindow: {type: integer, minimum: 0, description: D-19}
+        exitChangeWindowDays: {type: integer, minimum: 1}
+        unpaidHoldHours: {type: integer, minimum: 1}
+        maxUnpaidNewOrders: {type: integer, minimum: 1}
+        monthOptions:
+          type: array
+          minItems: 1
+          items: {type: integer, minimum: 1}
+        payment: {$ref: '#/components/schemas/PaymentInstructions'}
+        snapshotLines:
+          type: array
+          items: {type: string}
+    RulesVersion:
+      allOf:
+        - {$ref: '#/components/schemas/RulesInput'}
+        - type: object
+          required: [createdAt, createdBy]
+          properties:
+            createdAt: {type: string, format: date-time}
+            createdBy:
+              oneOf:
+                - {$ref: '#/components/schemas/AdminRef'}
+                - {type: 'null'}
+
+    # ---------------------------------------------------------------- 管理端：用户
+    AdminUser:
+      type: object
+      required: [id, email, verified, status, passwordSet, bannedAt, bannedReason, createdAt, createdByAdmin, subscriptionCount,
+                 openOrderCount, lastLoginAt]
+      properties:
+        id: {type: string}
+        email: {type: string}
+        verified: {type: boolean}
+        status: {type: string, enum: [active, banned]}
+        passwordSet: {type: boolean, description: 不显示登录密码，只显示是否已设置}
+        bannedAt: {type: [string, 'null'], format: date-time}
+        bannedReason: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+        createdByAdmin:
+          oneOf:
+            - {$ref: '#/components/schemas/AdminRef'}
+            - {type: 'null'}
+        subscriptionCount: {type: integer}
+        openOrderCount: {type: integer}
+        lastLoginAt: {type: [string, 'null'], format: date-time}
+    AdminUserDetail:
+      allOf:
+        - {$ref: '#/components/schemas/AdminUser'}
+        - type: object
+          required: [subscriptions, recentOrders, activeSessions]
+          properties:
+            subscriptions:
+              type: array
+              items: {$ref: '#/components/schemas/AdminSubscription'}
+            recentOrders:
+              type: array
+              items: {$ref: '#/components/schemas/AdminOrder'}
+            activeSessions: {type: integer}
+    AdminUserPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AdminUser'}
+        nextCursor: {type: [string, 'null']}
+
+    # ---------------------------------------------------------------- 管理端：订单与账务
+    PaymentRecord:
+      type: object
+      required: [id, amount, method, externalRef, lateArrival, note, confirmedBy, confirmedAt]
+      properties:
+        id: {type: string}
+        amount: {$ref: '#/components/schemas/Money'}
+        method: {type: string, enum: [manual_transfer, admin_gift]}
+        externalRef: {type: string}
+        lateArrival: {type: boolean}
+        note: {type: string}
+        confirmedBy: {$ref: '#/components/schemas/AdminRef'}
+        confirmedAt: {type: string, format: date-time}
+    ConfirmPaymentInput:
+      type: object
+      required: [method, amount, externalRef]
+      properties:
+        method: {type: string, enum: [manual_transfer, admin_gift], description: admin_gift 仅用于代建订阅（金额为 0）}
+        amount: {$ref: '#/components/schemas/Money'}
+        externalRef: {type: string, minLength: 1, maxLength: 200, description: 外部收款参考（流水号）；赠送时写原因}
+        note: {type: string, maxLength: 500}
+        lateArrival: {type: boolean, default: false}
+    Refund:
+      type: object
+      required: [id, orderId, status, amount, reclaimBytes, reclaimSeconds, reason, externalRef, requestedBy, requestedAt,
+                 decidedBy, decidedAt, decisionNote]
+      properties:
+        id: {type: string}
+        orderId: {type: string}
+        status: {type: string, enum: [review, approved, rejected]}
+        amount: {$ref: '#/components/schemas/Money'}
+        reclaimBytes: {type: integer, format: int64}
+        reclaimSeconds: {type: integer, format: int64}
+        reason: {type: string}
+        externalRef: {type: [string, 'null']}
+        requestedBy: {$ref: '#/components/schemas/AdminRef'}
+        requestedAt: {type: string, format: date-time}
+        decidedBy:
+          oneOf:
+            - {$ref: '#/components/schemas/AdminRef'}
+            - {type: 'null'}
+        decidedAt: {type: [string, 'null'], format: date-time}
+        decisionNote: {type: [string, 'null']}
+    RefundInput:
+      type: object
+      required: [amount, reclaimBytes, reclaimSeconds, reason]
+      properties:
+        amount: {$ref: '#/components/schemas/Money'}
+        reclaimBytes: {type: integer, format: int64, minimum: 0}
+        reclaimSeconds: {type: integer, format: int64, minimum: 0}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    RefundDecisionInput:
+      type: object
+      required: [approve, note]
+      properties:
+        approve: {type: boolean}
+        note: {type: string, maxLength: 500}
+        externalRef: {type: string, description: 批准时的退款流水}
+    RefundPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Refund'}
+        nextCursor: {type: [string, 'null']}
+    AdminOrder:
+      allOf:
+        - {$ref: '#/components/schemas/Order'}
+        - type: object
+          required: [user, paymentMethod, paymentRecord, ledgerEntries, refunds, rulesVersion, planVersionId, fulfillmentError,
+                     cancelReason, confirmedAt, deliveredAt, createdByAdmin]
+          properties:
+            user: {$ref: '#/components/schemas/UserRef'}
+            paymentMethod: {type: string, enum: [manual_transfer, admin_gift]}
+            paymentRecord:
+              oneOf:
+                - {$ref: '#/components/schemas/PaymentRecord'}
+                - {type: 'null'}
+            ledgerEntries:
+              type: array
+              description: 本订单产生的入账条目（时长、流量各至多一条；部分失败可见）
+              items: {$ref: '#/components/schemas/LedgerEntry'}
+            refunds:
+              type: array
+              items: {$ref: '#/components/schemas/Refund'}
+            rulesVersion: {type: string}
+            planVersionId: {type: [string, 'null']}
+            fulfillmentError: {type: [string, 'null']}
+            cancelReason: {type: [string, 'null'], enum: [user, timeout, admin, null]}
+            confirmedAt: {type: [string, 'null'], format: date-time}
+            deliveredAt: {type: [string, 'null'], format: date-time}
+            createdByAdmin:
+              oneOf:
+                - {$ref: '#/components/schemas/AdminRef'}
+                - {type: 'null'}
+    AdminOrderPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AdminOrder'}
+        nextCursor: {type: [string, 'null']}
+    AdminCreateOrderInput:
+      type: object
+      required: [userId, input]
+      properties:
+        userId: {type: string}
+        input: {$ref: '#/components/schemas/OrderInput'}
+
+    # ---------------------------------------------------------------- 管理端：换出口申请
+    ExitFeeStatus:
+      type: string
+      enum: [not_applicable, awaiting_decision, charged, waived]
+    AdminExitRequest:
+      allOf:
+        - {$ref: '#/components/schemas/ExitRequest'}
+        - type: object
+          required: [user, feeStatus, feeAmount, feeExternalRef, internalNote, taskId, handledBy, acceptedAt, finishedAt]
+          properties:
+            user: {$ref: '#/components/schemas/UserRef'}
+            feeStatus: {$ref: '#/components/schemas/ExitFeeStatus'}
+            feeAmount:
+              oneOf:
+                - {$ref: '#/components/schemas/Money'}
+                - {type: 'null'}
+            feeExternalRef: {type: [string, 'null']}
+            internalNote: {type: string}
+            taskId: {type: [string, 'null']}
+            handledBy:
+              oneOf:
+                - {$ref: '#/components/schemas/AdminRef'}
+                - {type: 'null'}
+            acceptedAt: {type: [string, 'null'], format: date-time}
+            finishedAt: {type: [string, 'null'], format: date-time}
+    AdminExitRequestPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AdminExitRequest'}
+        nextCursor: {type: [string, 'null']}
+    AcceptExitRequestInput:
+      type: object
+      required: [fee]
+      properties:
+        fee:
+          type: string
+          enum: [free, charged, waived]
+          description: free 只适用于 charge = free 的申请；manual 申请必须选 charged 或 waived
+        feeAmount: {$ref: '#/components/schemas/Money'}
+        feeExternalRef: {type: string, description: charged 时必填（收款参考）}
+        internalNote: {type: string, maxLength: 1000}
+    RejectExitRequestInput:
+      type: object
+      required: [failureReason]
+      properties:
+        failureReason: {type: string, minLength: 1, maxLength: 300, description: 面向客户，不含供应商信息}
+        internalNote: {type: string, maxLength: 1000}
+    CompleteExitRequestInput:
+      type: object
+      required: [outcome]
+      properties:
+        outcome: {type: string, enum: [succeeded, failed]}
+        taskId: {type: string}
+        failureReason: {type: string, maxLength: 300}
+        internalNote: {type: string, maxLength: 1000}
+    InternalNoteInput:
+      type: object
+      required: [internalNote]
+      properties:
+        internalNote: {type: string, maxLength: 1000}
+
+    # ---------------------------------------------------------------- 管理端：节点、告警、审计
+    Node:
+      type: object
+      required: [id, name, publicHost, portRange, status, online, lastSeenAt, lastReportAt, desiredRevision, appliedRevision,
+                 agentVersion, persistOk, clockSkewMs, capabilities, ports, subscriptions, activeConns, createdAt]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        publicHost: {type: string}
+        portRange:
+          type: object
+          required: [start, end]
+          properties:
+            start: {type: integer}
+            end: {type: integer}
+        status: {type: string, enum: [active, draining, disabled]}
+        online: {type: boolean, description: 最近 15 秒内有上报或长轮询}
+        lastSeenAt: {type: [string, 'null'], format: date-time}
+        lastReportAt: {type: [string, 'null'], format: date-time}
+        desiredRevision: {type: integer, format: int64}
+        appliedRevision: {type: integer, format: int64}
+        agentVersion: {type: [string, 'null']}
+        persistOk: {type: [boolean, 'null']}
+        clockSkewMs: {type: [integer, 'null']}
+        capabilities: {type: object, additionalProperties: true}
+        ports:
+          type: object
+          required: [total, free, allocated, cooldown]
+          properties:
+            total: {type: integer}
+            free: {type: integer}
+            allocated: {type: integer}
+            cooldown: {type: integer}
+        subscriptions: {type: integer, description: 承载的有效/保留期订阅数}
+        activeConns: {type: [integer, 'null']}
+        createdAt: {type: string, format: date-time}
+    NodeInput:
+      type: object
+      required: [name, publicHost]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 64}
+        publicHost: {type: string, minLength: 1, maxLength: 253}
+        portRange:
+          type: object
+          required: [start, end]
+          properties:
+            start: {type: integer, minimum: 1024, maximum: 65535, default: 20000}
+            end: {type: integer, minimum: 1024, maximum: 65535, default: 29999}
+    NodePatch:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 64}
+        publicHost: {type: string, minLength: 1, maxLength: 253}
+        status: {type: string, enum: [active, draining, disabled]}
+    AlertKind:
+      type: string
+      enum: [node_offline, upstream_error, config_failed, cert_risk, persist_failed, clock_skew, fulfill_failed,
+             exit_change_failed, port_pool_low, stock_low, late_payment]
+    AlertSeverity:
+      type: string
+      enum: [info, warning, critical]
+    AlertStatus:
+      type: string
+      enum: [open, acked, resolved]
+    Alert:
+      type: object
+      required: [id, kind, severity, status, message, details, nodeId, subscriptionId, resourceId, orderId, taskId, occurrences,
+                 firstSeenAt, lastSeenAt, ackedBy, ackedAt, ackNote, resolvedAt]
+      properties:
+        id: {type: string}
+        kind: {$ref: '#/components/schemas/AlertKind'}
+        severity: {$ref: '#/components/schemas/AlertSeverity'}
+        status: {$ref: '#/components/schemas/AlertStatus'}
+        message: {type: string}
+        details: {type: object, additionalProperties: true}
+        nodeId: {type: [string, 'null']}
+        subscriptionId: {type: [string, 'null']}
+        resourceId: {type: [string, 'null']}
+        orderId: {type: [string, 'null']}
+        taskId: {type: [string, 'null']}
+        occurrences: {type: integer}
+        firstSeenAt: {type: string, format: date-time}
+        lastSeenAt: {type: string, format: date-time}
+        ackedBy:
+          oneOf:
+            - {$ref: '#/components/schemas/AdminRef'}
+            - {type: 'null'}
+        ackedAt: {type: [string, 'null'], format: date-time}
+        ackNote: {type: [string, 'null']}
+        resolvedAt: {type: [string, 'null'], format: date-time}
+    AlertPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Alert'}
+        nextCursor: {type: [string, 'null']}
+    AckInput:
+      type: object
+      properties:
+        note: {type: string, maxLength: 500}
+    AuditLog:
+      type: object
+      required: [id, at, actor, action, targetType, targetId, outcome, ip, userAgent, details]
+      properties:
+        id: {type: integer, format: int64}
+        at: {type: string, format: date-time}
+        actor: {$ref: '#/components/schemas/Actor'}
+        action: {type: string, description: '对象.动作，如 order.confirm_payment、access.reveal'}
+        targetType: {type: [string, 'null']}
+        targetId: {type: [string, 'null']}
+        outcome: {type: string, enum: [ok, denied, failed]}
+        ip: {type: [string, 'null']}
+        userAgent: {type: [string, 'null']}
+        details: {type: object, additionalProperties: true, description: 不含明文凭据}
+    AuditLogPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AuditLog'}
+        nextCursor: {type: [string, 'null']}
+    ReasonInput:
+      type: object
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 500}
