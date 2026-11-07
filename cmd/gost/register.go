@@ -1,5 +1,9 @@
 package main
 
+// ISP 节点 agent 的组件 isp-tcp、isp-tls、isp-auth 不在这里注册：它们由 agent 运行时
+// （internal/agent/node，-agent-config）启动时经 agent.Install 注册，不带 -agent-config 时
+// GOST 的注册表与上游一致（TestISPComponentsNotRegisteredByDefault）。
+
 import (
 	// Register connectors
 	_ "github.com/go-gost/x/connector/direct"

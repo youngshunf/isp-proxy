@@ -39,6 +39,8 @@ var (
 	apiAddr      string
 	metricsAddr  string
 	reload       time.Duration
+	// agentConfig 是 ISP 节点 agent 的配置文件（本仓新增）。为空时行为与上游 GOST 完全一致。
+	agentConfig string
 )
 
 func init() {
@@ -110,16 +112,7 @@ func init() {
 
 	var printVersion bool
 
-	flag.Var(&services, "L", "service list")
-	flag.Var(&nodes, "F", "chain node list")
-	flag.Var(&cfgFiles, "C", "config file(s), URL(s), or inline JSON")
-	flag.BoolVar(&printVersion, "V", false, "print version")
-	flag.StringVar(&outputFormat, "O", "", "output format, one of yaml|json format")
-	flag.BoolVar(&debug, "D", false, "debug mode")
-	flag.BoolVar(&trace, "DD", false, "trace mode")
-	flag.StringVar(&apiAddr, "api", "", "api service address")
-	flag.StringVar(&metricsAddr, "metrics", "", "metrics service address")
-	flag.DurationVar(&reload, "R", 0, "auto reload period (e.g. 30s, 1m)")
+	defineFlags(flag.CommandLine, &printVersion)
 	flag.Parse()
 
 	if printVersion {
@@ -127,6 +120,21 @@ func init() {
 			getVersion(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		os.Exit(0)
 	}
+}
+
+// defineFlags 定义命令行参数。上游 GOST 的参数保持原样；本仓只新增 -agent-config。
+func defineFlags(fs *flag.FlagSet, printVersion *bool) {
+	fs.Var(&services, "L", "service list")
+	fs.Var(&nodes, "F", "chain node list")
+	fs.Var(&cfgFiles, "C", "config file(s), URL(s), or inline JSON")
+	fs.BoolVar(printVersion, "V", false, "print version")
+	fs.StringVar(&outputFormat, "O", "", "output format, one of yaml|json format")
+	fs.BoolVar(&debug, "D", false, "debug mode")
+	fs.BoolVar(&trace, "DD", false, "trace mode")
+	fs.StringVar(&apiAddr, "api", "", "api service address")
+	fs.StringVar(&metricsAddr, "metrics", "", "metrics service address")
+	fs.DurationVar(&reload, "R", 0, "auto reload period (e.g. 30s, 1m)")
+	fs.StringVar(&agentConfig, "agent-config", "", "ISP node agent config file (YAML); enables agent mode")
 }
 
 func main() {
