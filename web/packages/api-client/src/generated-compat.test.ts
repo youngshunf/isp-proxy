@@ -8,7 +8,7 @@
 // 已知差异（F-W1 用生成类型替换手写类型时处理）：
 //   1. 生成的 Plan / TrafficPack 多一个 versionId（下单时可回传做价格版本校验）；OrderInput 多可选的
 //      planVersionId / packVersionId，renew_time 多可选 packId（含流量续费）。
-//   2. 生成的 ErrorCode 多一个 forbidden（CSRF 校验失败、管理端权限）；手写 ApiErrorCode 没有。
+//   2. （已消除）手写 ApiErrorCode 已补上 forbidden，与生成的 ErrorCode 完全一致。
 //   3. verifyEmail / resendVerification 的请求体多可选 email（未登录时使用）；新增 confirmPasswordReset。
 //   4. OrderInputNew.quantity 契约上限为 1（D-13 一次订单一个订阅），原型购买页的数量步进器在 F-W4 删除。
 import { describe, expect, it } from 'vitest'
@@ -62,9 +62,8 @@ assert<Equal<S['ExitRequestStatus'], H.ExitRequestStatus>>()
 assert<Equal<S['StockLevel'], H.StockLevel>>()
 assert<Equal<S['AccessField'], H.AccessField>>()
 
-// 错误码：手写是生成的子集，唯一多出的是 forbidden（差异 2）。
-assert<Assignable<H.ApiErrorCode, S['ErrorCode']>>()
-assert<Equal<Exclude<S['ErrorCode'], H.ApiErrorCode>, 'forbidden'>>()
+// 错误码：完全一致。
+assert<Equal<H.ApiErrorCode, S['ErrorCode']>>()
 
 // ---- 请求：手写 → 生成 ----
 assert<Assignable<H.OrderInput, Body<'createOrder'>>>()
