@@ -1,16 +1,12 @@
-// 类型层契约测试：手写原型类型（src/index.ts）与从 api/openapi.yaml 生成的类型（src/generated/schema.ts）是否兼容。
+// 类型层契约测试：src/index.ts 导出的实体类型（F-W1 起直接取自生成的 schema.ts）与契约保持一致。
 // 断言在 `tsc`（pnpm typecheck）阶段生效；vitest 只跑下面的占位用例。
 //
 // 方向：
-//   - 服务端返回的类型：生成类型必须能赋给手写类型（前端按手写类型消费真实响应不会出错）。
-//   - 客户端提交的类型：手写类型必须能赋给生成类型（原型的请求体是合法的契约请求体）。
+//   - 服务端返回的类型：生成类型必须能赋给前端使用的类型。
+//   - 客户端提交的类型：前端构造的请求体必须是合法的契约请求体。
 //
-// 已知差异（F-W1 用生成类型替换手写类型时处理）：
-//   1. 生成的 Plan / TrafficPack 多一个 versionId（下单时可回传做价格版本校验）；OrderInput 多可选的
-//      planVersionId / packVersionId，renew_time 多可选 packId（含流量续费）。
-//   2. （已消除）手写 ApiErrorCode 已补上 forbidden，与生成的 ErrorCode 完全一致。
-//   3. verifyEmail / resendVerification 的请求体多可选 email（未登录时使用）；新增 confirmPasswordReset。
-//   4. OrderInputNew.quantity 契约上限为 1（D-13 一次订单一个订阅），原型购买页的数量步进器在 F-W4 删除。
+// 原型阶段的已知差异已全部消除：versionId、含流量续费的 packId、未登录验证带 email、confirmPasswordReset、
+// 新购 quantity 只能为 1（购买页已删除数量步进器）、目录带品牌名 brand。
 import { describe, expect, it } from 'vitest'
 import type * as H from './index'
 import type { components, operations } from './generated/schema'
@@ -72,6 +68,9 @@ assert<Assignable<{ mode: 'password' | 'ports_and_password' }, Body<'changeAcces
 assert<Assignable<{ name: string }, Body<'renameSubscription'>>>()
 assert<Assignable<{ email: string; password: string }, Body<'login'>>>()
 assert<Assignable<{ code: string }, Body<'verifyEmail'>>>()
+assert<Assignable<{ code: string; email: string }, Body<'verifyEmail'>>>()
+assert<Assignable<{ email: string; code: string; newPassword: string }, Body<'confirmPasswordReset'>>>()
+assert<Equal<H.Catalog['brand'], string>>()
 assert<Assignable<{ current: string; next: string }, Body<'changePassword'>>>()
 
 describe('生成类型与原型类型', () => {

@@ -23,6 +23,11 @@ export interface HttpOptions {
   readCookie?: (name: string) => string | null
   /** 每个响应的服务端时间（响应头 Date），用于“几分钟前”这类展示。 */
   onServerTime?: (serverMs: number) => void
+  /**
+   * 非 GET 请求发出前若还没有 CSRF Cookie，先 GET 这个路径取得它（任何缺少 isp_csrf 的响应都会下发，docs/06 §8.2）。
+   * 例如直接打开登录页时，登录请求之前没有任何 GET。不设则不补取。
+   */
+  csrfBootstrap?: string
 }
 
 export class NetworkError extends Error {
@@ -82,7 +87,15 @@ export function createHttp(opts: HttpOptions = {}): Requester {
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (ro.body !== undefined) headers['Content-Type'] = 'application/json'
     if (method !== 'GET') {
-      const token = readCookie(csrfName)
+      let token = readCookie(csrfName)
+      if (!token && opts.csrfBootstrap) {
+        try {
+          await doFetch(base + opts.csrfBootstrap, { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' })
+        } catch {
+          /* 取不到时照常发出，由服务端返回 403 forbidden */
+        }
+        token = readCookie(csrfName)
+      }
       if (token) headers['X-CSRF-Token'] = token
     }
     if (ro.idempotencyKey) headers['Idempotency-Key'] = ro.idempotencyKey

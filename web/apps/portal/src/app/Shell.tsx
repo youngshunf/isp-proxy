@@ -7,21 +7,38 @@ import {
   UserOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Dropdown, Spin } from 'antd'
-import { Suspense, type ReactNode } from 'react'
+import { Button, Dropdown, Result, Spin } from 'antd'
+import { Suspense, useEffect, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { TZ_LABEL } from '../lib/format'
-import { api, qk } from './api'
+import { USE_MOCK, api, errorText, qk, setQueryUser } from './api'
 
+/** 只在 mock 模式（VITE_PORTAL_API=mock）显示：真实数据下没有任何示意值。 */
 export function ProtoRibbon() {
-  return <div className="proto-ribbon">原型：所有 IP、价格、订单与收款信息均为示意数据</div>
+  if (!USE_MOCK) return null
+  return <div className="proto-ribbon">演示模式：所有 IP、价格、订单与收款信息均为示意数据</div>
+}
+
+/** 品牌名来自后端目录（Catalog.brand），前端不写死（docs/05 §6 第 6 步）。 */
+export function useBrand(): string | undefined {
+  const catalog = useQuery({ queryKey: qk.catalog, queryFn: () => api.getCatalog(), staleTime: 5 * 60_000 })
+  return catalog.data?.brand
+}
+
+/** 设置标签页标题：“页面 · 品牌”。 */
+export function useTitle(title: string) {
+  const brand = useBrand()
+  useEffect(() => {
+    document.title = brand ? `${title} · ${brand}` : title
+  }, [title, brand])
 }
 
 export function Brand() {
+  const brand = useBrand()
   return (
-    <Link to="/ips" className="brand" aria-label="ISP 代理，返回我的 IP">
+    <Link to="/ips" className="brand" aria-label={`${brand ?? '首页'}，返回我的 IP`}>
       <span className="brand-mark" aria-hidden="true" />
-      ISP 代理
+      <span className="brand-name">{brand ?? '\u00a0'}</span>
     </Link>
   )
 }
@@ -47,6 +64,9 @@ export function Shell() {
   const location = useLocation()
   const navigate = useNavigate()
   const qc = useQueryClient()
+  useTitle('我的 IP')
+  // 查询键带当前用户：在子页面渲染前确定（docs/05 §6 第 2 步）。
+  if (session.data) setQueryUser(session.data.email)
 
   if (session.isPending) {
     return (
@@ -56,14 +76,31 @@ export function Shell() {
       </>
     )
   }
+  if (session.isError) {
+    return (
+      <>
+        <ProtoRibbon />
+        <Result
+          status="warning"
+          title="暂时连不上服务"
+          subTitle={errorText(session.error)}
+          extra={<Button onClick={() => session.refetch()}>重试</Button>}
+        />
+      </>
+    )
+  }
   const account = session.data
-  if (!account) return <Navigate to="/login" replace state={{ from: location.pathname }} />
+  if (!account) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />
   if (!account.verified) return <Navigate to="/verify-email" replace />
 
   const logout = async () => {
-    await api.logout()
-    qc.clear()
-    navigate('/login', { replace: true })
+    try {
+      await api.logout()
+    } finally {
+      qc.clear()
+      setQueryUser(null)
+      navigate('/login', { replace: true })
+    }
   }
 
   return (

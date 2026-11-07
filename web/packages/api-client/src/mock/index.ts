@@ -13,6 +13,7 @@ import {
   type OrderInput,
   type OrderStep,
   type PortalApi,
+  type Plan,
   type Subscription,
   type SubscriptionEvent,
 } from '../index'
@@ -20,6 +21,16 @@ import {
 const GB = 1_000_000_000
 const DAY = 86_400_000
 const HOUR = 3_600_000
+
+/** 内存 mock 额外提供的测试钩子。 */
+export interface MockPortalApi extends PortalApi {
+  /** 模拟会话在服务端失效（过期或在别处改密）：之后需要登录的接口返回 401。 */
+  expireSession(): void
+  /** 下一次调用 op 时抛出 err（失败反馈测试）。 */
+  failNext(op: keyof PortalApi, err: Error): void
+  /** 各方法被调用的次数（重复提交测试）。 */
+  calls: Partial<Record<keyof PortalApi, number>>
+}
 
 export interface MockOptions {
   /** 模拟网络延迟区间（毫秒），测试中传 [0, 0]。 */
@@ -44,18 +55,19 @@ interface SubSeed {
 
 function seed(now: number) {
   const catalog: Catalog = {
+    brand: 'ISP 代理（演示）',
     plans: [
-      { id: 'us-lax', countryCode: 'us', country: '美国', city: '洛杉矶', monthlyPrice: cny(168), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
-      { id: 'us-nyc', countryCode: 'us', country: '美国', city: '纽约', monthlyPrice: cny(178), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'low' },
-      { id: 'gb-lon', countryCode: 'gb', country: '英国', city: '伦敦', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
-      { id: 'de-fra', countryCode: 'de', country: '德国', city: '法兰克福', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
-      { id: 'jp-tyo', countryCode: 'jp', country: '日本', city: '东京', monthlyPrice: cny(198), includedBytes: 100 * GB, concurrency: 80, bandwidthMbps: 30, stock: 'low' },
-      { id: 'sg-sin', countryCode: 'sg', country: '新加坡', city: '新加坡', monthlyPrice: cny(158), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'out' },
+      { id: 'us-lax', versionId: 'us-lax-v1', countryCode: 'us', country: '美国', city: '洛杉矶', monthlyPrice: cny(168), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      { id: 'us-nyc', versionId: 'us-nyc-v1', countryCode: 'us', country: '美国', city: '纽约', monthlyPrice: cny(178), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'low' },
+      { id: 'gb-lon', versionId: 'gb-lon-v1', countryCode: 'gb', country: '英国', city: '伦敦', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      { id: 'de-fra', versionId: 'de-fra-v1', countryCode: 'de', country: '德国', city: '法兰克福', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      { id: 'jp-tyo', versionId: 'jp-tyo-v1', countryCode: 'jp', country: '日本', city: '东京', monthlyPrice: cny(198), includedBytes: 100 * GB, concurrency: 80, bandwidthMbps: 30, stock: 'low' },
+      { id: 'sg-sin', versionId: 'sg-sin-v1', countryCode: 'sg', country: '新加坡', city: '新加坡', monthlyPrice: cny(158), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'out' },
     ],
     trafficPacks: [
-      { id: 't10', bytes: 10 * GB, price: cny(18) },
-      { id: 't50', bytes: 50 * GB, price: cny(75) },
-      { id: 't200', bytes: 200 * GB, price: cny(260) },
+      { id: 't10', versionId: 't10-v1', bytes: 10 * GB, price: cny(18) },
+      { id: 't50', versionId: 't50-v1', bytes: 50 * GB, price: cny(75) },
+      { id: 't200', versionId: 't200-v1', bytes: 200 * GB, price: cny(260) },
     ],
     monthOptions: [1, 3, 6],
     rules: {
@@ -301,18 +313,37 @@ const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(Math.random() * xs.lengt
 const ALNUM = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
 const randomPassword = () => Array.from({ length: 12 }, () => pick([...ALNUM])).join('')
 
-export function createMockApi(opts: MockOptions = {}): PortalApi {
+export function createMockApi(opts: MockOptions = {}): MockPortalApi {
   const now = opts.now ?? MOCK_NOW
   const [lo, hi] = opts.latency ?? [300, 600]
   const db = seed(now)
   let account: Account | null =
     opts.signedIn === false ? null : { email: 'demo@example.com', verified: true, status: 'active', createdAt: iso(now - 40 * DAY) }
-  let pendingEmail: string | null = null
+  let pending: { email: string; password: string } | null = null
   let orderSeq = 42
   let reqSeq = 8
+  // 幂等键 → 首次结果（同一键重复提交返回首次结果，与服务端一致）。
+  const idem = new Map<string, unknown>()
+  const once = <T,>(key: string, fn: () => T): T => {
+    if (idem.has(key)) return idem.get(key) as T
+    const v = fn()
+    idem.set(key, v)
+    return v
+  }
+  const calls: MockPortalApi['calls'] = {}
+  const failures = new Map<keyof PortalApi, Error>()
 
-  const wait = <T,>(fn: () => T): Promise<T> =>
+  const wait = <T,>(fn: () => T, op?: keyof PortalApi): Promise<T> =>
     new Promise((resolve, reject) => {
+      if (op) {
+        calls[op] = (calls[op] ?? 0) + 1
+        const f = failures.get(op)
+        if (f) {
+          failures.delete(op)
+          setTimeout(() => reject(f), lo)
+          return
+        }
+      }
       const ms = lo + Math.random() * (hi - lo)
       setTimeout(() => {
         try {
@@ -351,38 +382,59 @@ export function createMockApi(opts: MockOptions = {}): PortalApi {
   }
 
   return {
-    session: () => wait(() => account),
+    session: () => wait(() => account, 'session'),
     login: (email, password) =>
       wait(() => {
         if (password.length < 8) throw new ApiError('invalid', '邮箱或密码不正确')
-        account = { email: email.trim().toLowerCase(), verified: true, status: 'active', createdAt: iso(now - 40 * DAY) }
+        const e = email.trim().toLowerCase()
+        const verified = !(pending && pending.email === e)
+        account = { email: e, verified, status: 'active', createdAt: iso(now - (verified ? 40 * DAY : 0)) }
         return account
-      }),
-    register: (email) =>
+      }, 'login'),
+    register: (email, password) =>
       wait(() => {
-        pendingEmail = email.trim().toLowerCase()
-        account = { email: pendingEmail, verified: false, status: 'active', createdAt: iso(now) }
-        return { email: pendingEmail }
-      }),
-    verifyEmail: (code) =>
+        // 与服务端一致：注册不建会话，随后用验证码（带邮箱）验证即登录。
+        pending = { email: email.trim().toLowerCase(), password }
+        return { email: pending.email }
+      }, 'register'),
+    verifyEmail: (code, email) =>
       wait(() => {
-        if (!account) throw new ApiError('unauthorized', '登录已失效，请重新登录')
         if (code.trim() !== '123456') throw new ApiError('invalid', '验证码不正确或已过期')
-        account = { ...account, verified: true }
+        if (account) {
+          account = { ...account, verified: true }
+          return account
+        }
+        const e = email?.trim().toLowerCase()
+        if (!e || !pending || pending.email !== e) throw new ApiError('invalid', '验证码不正确或已过期')
+        account = { email: e, verified: true, status: 'active', createdAt: iso(now) }
+        pending = null
         return account
-      }),
-    resendVerification: () => wait(() => undefined),
-    requestPasswordReset: () => wait(() => undefined),
+      }, 'verifyEmail'),
+    resendVerification: () => wait(() => undefined, 'resendVerification'),
+    requestPasswordReset: () => wait(() => undefined, 'requestPasswordReset'),
+    confirmPasswordReset: (_email, code, next) =>
+      wait(() => {
+        if (code.trim() !== '123456') throw new ApiError('invalid', '验证码不正确或已过期')
+        if (next.length < 10) throw new ApiError('invalid', '新密码至少 10 位')
+        account = null
+      }, 'confirmPasswordReset'),
     changePassword: (current, next) =>
       wait(() => {
         authed()
         if (current.length < 8) throw new ApiError('invalid', '当前密码不正确')
         if (next.length < 10) throw new ApiError('invalid', '新密码至少 10 位')
-      }),
+      }, 'changePassword'),
     logout: () =>
       wait(() => {
         account = null
-      }),
+      }, 'logout'),
+    expireSession: () => {
+      account = null
+    },
+    failNext: (op, err) => {
+      failures.set(op, err)
+    },
+    calls,
 
     listSubscriptions: () =>
       wait(() => {
@@ -409,8 +461,8 @@ export function createMockApi(opts: MockOptions = {}): PortalApi {
         s.sub.name = trimmed
         return view(s)
       }),
-    changeAccess: (id, mode) =>
-      wait(() => {
+    changeAccess: (id, mode, key) =>
+      wait(() => once(`access:${key}`, () => {
         authed()
         const s = findSub(id)
         const v = view(s)
@@ -444,7 +496,7 @@ export function createMockApi(opts: MockOptions = {}): PortalApi {
           detail: `接入 v${prev.version} → v${next.version}：${mode === 'password' ? '仅重置密码，端口不变' : '端口与密码已更换'}；出口与余量不变`,
         })
         return next
-      }),
+      }), 'changeAccess'),
     acknowledgeAccess: (id) =>
       wait(() => {
         authed()
@@ -453,8 +505,8 @@ export function createMockApi(opts: MockOptions = {}): PortalApi {
       }),
 
     getCatalog: () => wait(() => db.catalog),
-    createOrder: (input: OrderInput) =>
-      wait(() => {
+    createOrder: (input: OrderInput, key: string) =>
+      wait(() => once(`order:${key}`, () => {
         authed()
         const seq = orderSeq++
         const base = {
@@ -469,22 +521,23 @@ export function createMockApi(opts: MockOptions = {}): PortalApi {
         }
         let order: Order
         if (input.kind === 'new') {
-          const plan = db.catalog.plans.find((p) => p.id === input.planId)
+          if (input.quantity !== 1) throw new ApiError('invalid', '一次订单只能购买 1 个 IP')
+          const plan: Plan | undefined = db.catalog.plans.find((p) => p.id === input.planId)
           if (!plan) throw new ApiError('not_found', '套餐不存在或已下架')
           if (plan.stock === 'out') throw new ApiError('conflict', '该地区暂时无货，请选择其他地区')
           const unpaid = db.orders.filter((o) => o.kind === 'new' && o.payment === 'awaiting').length
           if (unpaid >= db.catalog.rules.maxUnpaidNewOrders)
             throw new ApiError('conflict', `最多同时保留 ${db.catalog.rules.maxUnpaidNewOrders} 个未付款新购订单`)
-          const yuan = (plan.monthlyPrice.amount / 100) * input.months * input.quantity
+          const yuan = (plan.monthlyPrice.amount / 100) * input.months
           order = {
             ...base, kind: 'new', amount: cny(yuan), subscriptionId: null, subscriptionName: null,
             lines: [{
-              label: `${plan.country} · ${plan.city} 包月 × ${input.quantity}`,
-              detail: `${input.months} 个月 · 每个含 ${plan.includedBytes / GB} GB · 并发 ${plan.concurrency} · ${plan.bandwidthMbps} Mbps`,
+              label: `${plan.country} · ${plan.city} 包月`,
+              detail: `${input.months} 个月 · 含 ${plan.includedBytes / GB} GB · 并发 ${plan.concurrency} · ${plan.bandwidthMbps} Mbps`,
               amount: cny(yuan),
             }],
             steps: [{ label: '下单', state: 'done', at: iso(now) }, { label: '核款确认', state: 'current', at: null }, { label: '开通中', state: 'todo', at: null }, { label: '已交付', state: 'todo', at: null }],
-            rulesSnapshot: [`首购：每个 IP 时长 ${input.months * 30} 天 + 流量 ${plan.includedBytes / GB} GB`, '具体出口在开通时分配，下单不锁定地址'],
+            rulesSnapshot: [`首购：时长 ${input.months * 30} 天 + 流量 ${plan.includedBytes / GB} GB`, '具体出口在开通时分配，下单不锁定地址'],
           }
         } else {
           const s = findSub(input.subscriptionId)
@@ -511,7 +564,7 @@ export function createMockApi(opts: MockOptions = {}): PortalApi {
         }
         db.orders.unshift(order)
         return order
-      }),
+      }), 'createOrder'),
     listOrders: () =>
       wait(() => {
         authed()
@@ -548,11 +601,14 @@ export function createMockApi(opts: MockOptions = {}): PortalApi {
         authed()
         return db.requests
       }),
-    createExitRequest: (input: ExitRequestInput) =>
-      wait(() => {
+    createExitRequest: (input: ExitRequestInput, key: string) =>
+      wait(() => once(`exit:${key}`, () => {
         authed()
         const s = findSub(input.subscriptionId)
-        if (s.sub.openExitRequestId) throw new ApiError('conflict', '这个 IP 已有处理中的换出口申请')
+        if (s.sub.openExitRequestId) {
+          const existing = db.requests.find((r) => r.id === s.sub.openExitRequestId)
+          throw new ApiError('conflict', '这个 IP 已有未完成的换出口申请', { details: existing ? { existing } : null })
+        }
         if (!s.sub.exit || (s.sub.lifecycle !== 'active' && s.sub.lifecycle !== 'retained'))
           throw new ApiError('precondition', '这个 IP 还没有出口可换')
         const seq = reqSeq++
@@ -577,6 +633,6 @@ export function createMockApi(opts: MockOptions = {}): PortalApi {
         s.sub.openExitRequestId = req.id
         db.requests.unshift(req)
         return req
-      }),
+      }), 'createExitRequest'),
   }
 }

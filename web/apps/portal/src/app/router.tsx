@@ -1,18 +1,21 @@
 import type { ComponentType } from 'react'
-import { createBrowserRouter, Navigate } from 'react-router'
+import { Navigate, type RouteObject } from 'react-router'
 import { Shell } from './Shell'
 
 // Data 模式纯 SPA：路由只负责拆包与布局，不用 loader 取数（数据统一走 TanStack Query，见 docs/03）。
 const page = (load: () => Promise<{ default: ComponentType }>) => async () => ({ Component: (await load()).default })
-const auth = (name: 'LoginPage' | 'RegisterPage' | 'VerifyEmailPage' | 'ForgotPasswordPage' | 'NotFoundPage') => async () => ({
+type AuthPage = 'LoginPage' | 'RegisterPage' | 'VerifyEmailPage' | 'ForgotPasswordPage' | 'ResetPasswordPage' | 'NotFoundPage'
+const auth = (name: AuthPage) => async () => ({
   Component: (await import('../pages/AuthPages'))[name],
 })
 
-export const router = createBrowserRouter([
+export const routes: RouteObject[] = [
   { path: '/login', lazy: auth('LoginPage') },
   { path: '/register', lazy: auth('RegisterPage') },
   { path: '/verify-email', lazy: auth('VerifyEmailPage') },
   { path: '/forgot-password', lazy: auth('ForgotPasswordPage') },
+  // 邮件里的重设链接（?email=&code=）或手动输入验证码都落到这里。
+  { path: '/reset-password', lazy: auth('ResetPasswordPage') },
   {
     path: '/',
     Component: Shell,
@@ -29,4 +32,4 @@ export const router = createBrowserRouter([
       { path: '*', lazy: auth('NotFoundPage') },
     ],
   },
-])
+]

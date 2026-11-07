@@ -19,7 +19,7 @@ export function fillPath(template: string, params: Record<string, unknown>): str
 }
 
 export function createAdminApi(opts: HttpOptions = {}): AdminApi {
-  const request = createHttp({ csrfCookie: 'isp_csrf', ...opts })
+  const request = createHttp({ csrfCookie: 'isp_csrf', csrfBootstrap: '/admin-api/me', ...opts })
   const api: Partial<Record<AdminOp, (input?: AnyInput) => Promise<unknown>>> = {}
   for (const op of Object.keys(ADMIN_ROUTES) as AdminOp[]) {
     const [method, path] = ADMIN_ROUTES[op]

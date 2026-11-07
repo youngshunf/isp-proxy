@@ -5,7 +5,9 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import type { ExitReason, Subscription } from '@isp/api-client'
 import { api, errorText, qk } from '../app/api'
+import { ApiError, type ExitRequest } from '@isp/api-client'
 import { fmtAgo, fmtDate, fmtDay } from '../lib/format'
+import { useIntentKey } from '../lib/intent'
 import { EXIT_CHECK, EXIT_REASON, EXIT_REQUEST } from '../lib/status'
 import { SignalBars, StateMark } from '@isp/ui'
 import { Plate } from '@isp/ui'
@@ -22,10 +24,14 @@ function ExitRequestDialog({ sub, onClose }: { sub: Subscription; onClose: () =>
   const qc = useQueryClient()
   const { message } = App.useApp()
   const free = sub.quotas.freeExitChangesLeft > 0
+  const intent = useIntentKey()
   const create = useMutation({
-    mutationFn: (v: FormValues) =>
-      api.createExitRequest({ subscriptionId: sub.id, reason: v.reason, note: v.note ?? '', alsoChangeAccess: v.alsoChangeAccess }),
+    mutationFn: (v: FormValues) => {
+      const input = { subscriptionId: sub.id, reason: v.reason, note: (v.note ?? '').trim(), alsoChangeAccess: v.alsoChangeAccess }
+      return api.createExitRequest(input, intent.keyFor(input))
+    },
     onSuccess: (r) => {
+      intent.reset()
       void qc.invalidateQueries({ queryKey: qk.subs })
       void qc.invalidateQueries({ queryKey: qk.requests })
       message.success(`已提交换出口申请 ${r.no}`)
@@ -38,7 +44,7 @@ function ExitRequestDialog({ sub, onClose }: { sub: Subscription; onClose: () =>
       title={`申请换出口 · ${sub.name}`}
       okText="提交申请"
       cancelText="取消"
-      onOk={() => form.submit()}
+      onOk={() => !create.isPending && form.submit()}
       onCancel={onClose}
       okButtonProps={{ loading: create.isPending }}
       width={560}
@@ -79,12 +85,34 @@ function ExitRequestDialog({ sub, onClose }: { sub: Subscription; onClose: () =>
       </div>
       <p className="plate-note" style={{ margin: '12px 0 0' }}>
         {free
-          ? '本次使用免费次数（每 30 天 1 次）。新出口在同一国家内分配，提交后在「申请」页查看进度。'
+          ? `本次使用免费次数（本期剩 ${sub.quotas.freeExitChangesLeft} 次）。新出口在同一国家内分配，提交后在「申请」页查看进度。`
           : `免费次数已用完${sub.quotas.freeExitWindowEndsAt ? `，${fmtDay(sub.quotas.freeExitWindowEndsAt)} 恢复` : ''}。提交后由管理员确认是否收费，确认前不会切换。`}
       </p>
-      {create.isError && <Alert style={{ marginTop: 12 }} type="error" showIcon title={errorText(create.error)} />}
+      {create.isError && <CreateError error={create.error} />}
     </Modal>
   )
+}
+
+/** 提交失败：冲突时展示服务端带回的现有申请（R-17.3），其他错误只展示服务端说明。 */
+function CreateError({ error }: { error: unknown }) {
+  const existing = error instanceof ApiError && error.code === 'conflict' ? (error.details?.existing as ExitRequest | undefined) : undefined
+  if (existing) {
+    return (
+      <Alert
+        style={{ marginTop: 12 }}
+        type="warning"
+        showIcon
+        title={errorText(error)}
+        description={
+          <>
+            现有申请 <span className="mono">{existing.no}</span>（{EXIT_REQUEST[existing.status].label}，提交于 {fmtDate(existing.createdAt)}）。
+            <Link to="/requests"> 查看申请</Link>
+          </>
+        }
+      />
+    )
+  }
+  return <Alert style={{ marginTop: 12 }} type="error" showIcon title={errorText(error)} />
 }
 
 /** 出口分区：实测地址、检测结果、换出口申请。 */
@@ -151,7 +179,7 @@ export function ExitPanel({ sub }: { sub: Subscription }) {
             </Button>
             <span className="plate-note">
               {free
-                ? '本期还有 1 次免费 · 接入与余量不变，可选同时换接入'
+                ? `本期还有 ${sub.quotas.freeExitChangesLeft} 次免费 · 接入与余量不变，可选同时换接入`
                 : `免费次数已用完${sub.quotas.freeExitWindowEndsAt ? `，${fmtDay(sub.quotas.freeExitWindowEndsAt)} 恢复` : ''} · 超出由管理员确认`}
             </span>
           </div>

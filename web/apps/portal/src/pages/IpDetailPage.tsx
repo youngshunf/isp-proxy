@@ -4,7 +4,8 @@ import { App, Button, Input, Result, Segmented, Skeleton } from 'antd'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import type { Subscription, SubscriptionEvent, SubscriptionEventKind } from '@isp/api-client'
-import { api, errorText, qk } from '../app/api'
+import { POLL_MS, api, errorText, qk } from '../app/api'
+import { useTitle } from '../app/Shell'
 import { AccessPanel } from '../components/AccessPanel'
 import { Balances } from '../components/Balances'
 import { ExitPanel } from '../components/ExitPanel'
@@ -166,7 +167,16 @@ function Blockers({ sub }: { sub: Subscription }) {
 export default function IpDetailPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
-  const q = useQuery({ queryKey: qk.sub(id), queryFn: () => api.getSubscription(id) })
+  // 开通中、变更中（换接入后节点应用前）按 POLL_MS 轮询，进入稳定状态即停止（docs/05 §6 第 5 步）。
+  const q = useQuery({
+    queryKey: qk.sub(id),
+    queryFn: () => api.getSubscription(id),
+    refetchInterval: (query) => {
+      const s = query.state.data
+      return s && (s.lifecycle === 'pending' || s.blockers.includes('changing') || s.openExitRequestId) ? POLL_MS : false
+    },
+  })
+  useTitle(q.data?.name ?? 'IP 详情')
 
   if (q.isPending) {
     return (

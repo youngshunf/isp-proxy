@@ -4,7 +4,8 @@ import { Button, Result, Skeleton } from 'antd'
 import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { remainingBytes, type Subscription } from '@isp/api-client'
-import { api, errorText, qk } from '../app/api'
+import { POLL_MS, api, errorText, qk } from '../app/api'
+import { useTitle } from '../app/Shell'
 import { StateMark } from '@isp/ui'
 import { Plate } from '@isp/ui'
 import { SimCard } from '../components/SimCard'
@@ -82,7 +83,12 @@ function Attention({ subs, awaiting }: { subs: Subscription[]; awaiting: number 
 
 export default function IpsPage() {
   const navigate = useNavigate()
-  const subs = useQuery({ queryKey: qk.subs, queryFn: () => api.listSubscriptions() })
+  useTitle('我的 IP')
+  const subs = useQuery({
+    queryKey: qk.subs,
+    queryFn: () => api.listSubscriptions(),
+    refetchInterval: (q) => (q.state.data?.some((s) => s.lifecycle === 'pending' || s.blockers.includes('changing')) ? POLL_MS : false),
+  })
   const orders = useQuery({ queryKey: qk.orders, queryFn: () => api.listOrders() })
   const awaiting = orders.data?.filter((o) => o.payment === 'awaiting').length ?? 0
 

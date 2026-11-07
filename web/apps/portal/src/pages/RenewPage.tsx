@@ -3,8 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Result, Segmented, Skeleton, Button } from 'antd'
 import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
-import { remainingBytes } from '@isp/api-client'
+import { remainingBytes, type OrderInput } from '@isp/api-client'
 import { api, errorText, qk } from '../app/api'
+import { useTitle } from '../app/Shell'
+import { useIntentKey } from '../lib/intent'
 import { OrderSummary, type SummaryLine } from '../components/OrderSummary'
 import { Plate } from '@isp/ui'
 import { ExitFace, StateCell } from '../components/SimCard'
@@ -23,12 +25,12 @@ export default function RenewPage() {
   const catalog = useQuery({ queryKey: qk.catalog, queryFn: () => api.getCatalog(), staleTime: 5 * 60_000 })
   const [months, setMonths] = useState(1)
   const [packId, setPackId] = useState<string | null>(null)
+  const intent = useIntentKey()
+  useTitle(kind === 'time' ? '续时长' : '买流量')
   const create = useMutation({
-    mutationFn: () =>
-      kind === 'time'
-        ? api.createOrder({ kind: 'renew_time', subscriptionId: id, months })
-        : api.createOrder({ kind: 'add_traffic', subscriptionId: id, packId: packId! }),
+    mutationFn: (input: OrderInput) => api.createOrder(input, intent.keyFor(input)),
     onSuccess: (o) => {
+      intent.reset()
       void qc.invalidateQueries({ queryKey: qk.orders })
       void qc.invalidateQueries({ queryKey: qk.subs })
       navigate(`/orders/${o.id}`)
@@ -49,15 +51,18 @@ export default function RenewPage() {
   }
   const s = sub.data
   const c = catalog.data
-  const plan = c.plans.find((p) => p.city === s.plan.city)
-  const monthly = plan?.monthlyPrice.amount ?? 0
+  // 续时长按该地区当前上架套餐的价格估算；最终金额以服务端生成的订单为准。
+  const plan = c.plans.find((p) => p.countryCode === s.plan.countryCode && p.city === s.plan.city)
+  const monthly = plan?.monthlyPrice.amount ?? null
   const retained = s.lifecycle === 'retained'
   const expired = s.blockers.includes('expired') || s.blockers.includes('released')
   const pack = c.trafficPacks.find((p) => p.id === packId)
 
   const lines: SummaryLine[] =
     kind === 'time'
-      ? [{ label: '续时长', detail: `+${months * c.rules.periodDays} 天 · 不改流量`, amount: { amount: monthly * months, currency: 'CNY' } }]
+      ? monthly === null
+        ? []
+        : [{ label: '续时长', detail: `+${months * c.rules.periodDays} 天 · 不改流量`, amount: { amount: monthly * months, currency: 'CNY' } }]
       : pack
         ? [{ label: '买流量', detail: `+${fmtBytes(pack.bytes)} · 不改到期时间`, amount: pack.price }]
         : []
@@ -118,13 +123,19 @@ export default function RenewPage() {
                     {c.monthOptions.map((m) => (
                       <button key={m} type="button" className="choice" aria-pressed={months === m} onClick={() => setMonths(m)}>
                         <b>+{m * c.rules.periodDays} 天</b>
-                        <span>{fmtMoney({ amount: monthly * m, currency: 'CNY' })}</span>
+                        <span>{monthly === null ? '—' : fmtMoney({ amount: monthly * m, currency: 'CNY' })}</span>
                       </button>
                     ))}
                   </div>
                   <div className="preview-change">
                     到期时间 <b>{timePreview}</b>
                   </div>
+                  {monthly === null && (
+                    <div className="callout warn" style={{ marginTop: 14 }}>
+                      <WarningOutlined />
+                      <div>该地区的套餐已下架，暂时不能自助续时长，请联系客服。</div>
+                    </div>
+                  )}
                   {retained && (
                     <div className="callout info" style={{ marginTop: 14 }}>
                       <div>
@@ -181,7 +192,10 @@ export default function RenewPage() {
           submitText={lines[0] ? `提交订单 · ${fmtMoney(lines[0].amount)}` : '提交订单'}
           loading={create.isPending}
           error={create.isError ? errorText(create.error) : null}
-          onSubmit={() => create.mutate()}
+          onSubmit={() => {
+            if (kind === 'time') create.mutate({ kind: 'renew_time', subscriptionId: id, months })
+            else if (pack) create.mutate({ kind: 'add_traffic', subscriptionId: id, packId: pack.id, packVersionId: pack.versionId })
+          }}
         />
       </div>
     </>
