@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -16,22 +15,12 @@ import (
 
 // ---- 加密（docs/06 §3：接入密码与上游密码 AES-256-GCM，nonce || 密文） ----
 
-// Seal 加密明文。
-func (e *Env) Seal(plain string) []byte {
-	nonce := make([]byte, e.aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		panic("kernel: crypto/rand 不可用: " + err.Error())
-	}
-	return e.aead.Seal(nonce, nonce, []byte(plain), nil)
-}
+// Seal 加密明文（secret.Box，nonce || 密文）。
+func (e *Env) Seal(plain string) []byte { return e.box.Seal([]byte(plain), nil) }
 
 // Open 解密。
 func (e *Env) Open(sealed []byte) (string, error) {
-	n := e.aead.NonceSize()
-	if len(sealed) < n {
-		return "", errors.New("kernel: 密文过短")
-	}
-	out, err := e.aead.Open(nil, sealed[:n], sealed[n:], nil)
+	out, err := e.box.Open(sealed, nil)
 	if err != nil {
 		return "", fmt.Errorf("kernel: 解密失败: %w", err)
 	}

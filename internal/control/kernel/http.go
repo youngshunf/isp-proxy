@@ -52,9 +52,12 @@ func Reply(w http.ResponseWriter, r *http.Request, status int, v any, err error)
 	httpx.WriteJSON(w, status, v)
 }
 
-// Decode 解析请求体到 T。
+// Decode 严格解析请求体到 T（未知字段 422）。请求体为空时返回零值：契约中可选请求体的操作（暂停、确认等）允许不带体。
 func Decode[T any](r *http.Request) (T, error) {
 	var v T
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+		return v, nil
+	}
 	err := httpx.DecodeJSON(r, &v)
 	return v, err
 }

@@ -7,8 +7,6 @@ package kernel
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +14,7 @@ import (
 
 	"github.com/go-gost/gost/internal/agentproto"
 	"github.com/go-gost/gost/internal/control/clock"
+	"github.com/go-gost/gost/internal/control/secret"
 	"github.com/go-gost/gost/internal/control/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -42,8 +41,8 @@ type Mailer interface {
 
 // Config 是业务内核的可配置项。零值字段取默认值。
 type Config struct {
-	// SecretKey 是接入密码与上游密码的 AES-256-GCM 密钥（32 字节，来自 ISP_SECRET_KEY）。
-	SecretKey []byte
+	// Box 加密接入密码与上游密码（AES-256-GCM，密钥来自 ISP_SECRET_KEY，与平台共用）。必填。
+	Box *secret.Box
 	// EchoURL 是探测使用的 IP 回显端点。
 	EchoURL string
 	// ExitCheckInterval 是定时出口检测间隔；超过两倍未更新视为 stale。默认 10 分钟。
@@ -112,21 +111,13 @@ type Env struct {
 	Log   *slog.Logger
 
 	auditor Auditor
-	aead    cipher.AEAD
+	box     *secret.Box
 }
 
-// NewEnv 创建运行环境。cfg.SecretKey 必须是 32 字节。
+// NewEnv 创建运行环境。cfg.Box 必填。
 func NewEnv(pool *pgxpool.Pool, cfg Config, clk clock.Clock, mail Mailer, audit Auditor, log *slog.Logger) (*Env, error) {
-	if len(cfg.SecretKey) != 32 {
-		return nil, fmt.Errorf("kernel: SecretKey 必须是 32 字节（AES-256），得到 %d", len(cfg.SecretKey))
-	}
-	block, err := aes.NewCipher(cfg.SecretKey)
-	if err != nil {
-		return nil, err
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
+	if pool == nil || cfg.Box == nil {
+		return nil, fmt.Errorf("kernel: 缺少数据库或密钥")
 	}
 	if clk == nil {
 		clk = clock.System{}
@@ -135,7 +126,7 @@ func NewEnv(pool *pgxpool.Pool, cfg Config, clk clock.Clock, mail Mailer, audit 
 		log = slog.Default()
 	}
 	return &Env{Pool: pool, Clock: clk, Cfg: cfg.withDefaults(), Hub: agentproto.NewHub(), Mail: mail, Log: log,
-		auditor: audit, aead: aead}, nil
+		auditor: audit, box: cfg.Box}, nil
 }
 
 // Now 返回注入时钟的当前时间（UTC，微秒精度）。
