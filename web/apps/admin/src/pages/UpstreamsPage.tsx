@@ -2,26 +2,18 @@
 // 上游密码只写不读：接口只返回“是否已设密码”，编辑时留空表示不改。
 import { EditOutlined, PlusOutlined, RadarChartOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Input, InputNumber, Modal, Segmented, Select, Space } from 'antd'
+import { App, Button, Segmented, Space } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import type { Probe, Upstream, UpstreamStatus } from '@isp/api-client/admin'
 import { CountryFlag, Plate, fmtDateTime } from '@isp/ui'
 import { errorText, qk, useApi } from '../app/api'
-import { Callout, Mono, PageHead, State } from '../components/bits'
+import { Mono, PageHead, State } from '../components/bits'
 import { ConfirmAction } from '../components/ConfirmAction'
 import { DataTable, arr, str, type Column, type FilterDef } from '../components/DataTable'
+import { COUNTRIES, UpstreamDialog } from '../components/UpstreamDialog'
 import { useProbe } from '../lib/jobs'
 import { UPSTREAM, options } from '../lib/status'
-
-const COUNTRIES = [
-  { value: 'us', label: '美国', },
-  { value: 'gb', label: '英国' },
-  { value: 'de', label: '德国' },
-  { value: 'jp', label: '日本' },
-  { value: 'sg', label: '新加坡' },
-  { value: 'ca', label: '加拿大' },
-]
 
 export default function UpstreamsPage() {
   const api = useApi()
@@ -214,183 +206,6 @@ function VerifyCell({ probe }: { probe: Probe }) {
     <span>
       <Mono>{p.observedIp}</Mono> · {p.latencyMs} ms
     </span>
-  )
-}
-
-interface FormState {
-  mode: 'url' | 'fields'
-  url: string
-  protocol: 'http' | 'https' | 'socks5'
-  host: string
-  port: number | null
-  username: string
-  password: string
-  nodeId?: string
-  countryCode?: string
-  city: string
-  provider: string
-  note: string
-}
-
-function UpstreamDialog({ value, nodes, onClose }: { value: Upstream | 'new' | null; nodes: { value: string; label: string }[]; onClose: () => void }) {
-  const api = useApi()
-  const qc = useQueryClient()
-  const { message } = App.useApp()
-  const editing = value && value !== 'new' ? value : null
-  const blank: FormState = { mode: 'url', url: '', protocol: 'socks5', host: '', port: null, username: '', password: '', nodeId: nodes[0]?.value, countryCode: 'us', city: '', provider: '', note: '' }
-  const [f, setF] = useState<FormState>(blank)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    if (!value) return
-    setError(null)
-    if (value === 'new') setF({ ...blank, nodeId: nodes[0]?.value })
-    else
-      setF({
-        mode: 'fields',
-        url: '',
-        protocol: value.protocol,
-        host: value.host,
-        port: value.port,
-        username: value.username,
-        password: '',
-        nodeId: value.nodeId,
-        countryCode: value.countryCode,
-        city: value.city,
-        provider: value.provider,
-        note: value.note,
-      })
-  }, [value])
-  const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((x) => ({ ...x, [k]: v }))
-  const country = COUNTRIES.find((c) => c.value === f.countryCode)
-
-  const submit = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      if (editing) {
-        await api.adminUpdateUpstream({
-          upstreamId: editing.id,
-          body: {
-            rowVersion: editing.rowVersion,
-            protocol: f.protocol,
-            host: f.host.trim(),
-            port: f.port ?? undefined,
-            username: f.username,
-            password: f.password || undefined,
-            countryCode: f.countryCode,
-            country: country?.label,
-            city: f.city.trim(),
-            provider: f.provider,
-            note: f.note,
-          },
-        })
-        message.success('已保存')
-      } else {
-        await api.adminCreateUpstream({
-          body: {
-            ...(f.mode === 'url' ? { url: f.url.trim() } : { protocol: f.protocol, host: f.host.trim(), port: f.port ?? undefined, username: f.username, password: f.password || undefined }),
-            nodeId: f.nodeId!,
-            countryCode: f.countryCode!,
-            country: country?.label ?? f.countryCode!,
-            city: f.city.trim(),
-            provider: f.provider || undefined,
-            note: f.note || undefined,
-          },
-        })
-        message.success('已录入，状态为“待验证”')
-      }
-      void qc.invalidateQueries({ queryKey: qk.upstreams })
-      onClose()
-    } catch (e) {
-      setError(errorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const connReady = f.mode === 'url' ? f.url.trim().length > 0 : f.host.trim().length > 0 && !!f.port
-  const ready = connReady && !!f.nodeId && !!f.countryCode && f.city.trim().length > 0
-
-  return (
-    <Modal
-      open={!!value}
-      title={editing ? `编辑上游 ${editing.host}` : '录入上游'}
-      onCancel={() => !busy && onClose()}
-      onOk={submit}
-      okText={editing ? '保存' : '录入'}
-      cancelText="取消"
-      okButtonProps={{ disabled: !ready, loading: busy }}
-      destroyOnHidden
-      width={640}
-    >
-      <div className="confirm-body">
-        {editing?.status === 'bound' && <Callout tone="warn">资源已被订阅占用：只能改地区、供应商与备注；改连接信息要先为订阅换出口。</Callout>}
-        {editing && editing.status !== 'bound' && <Callout tone="info">修改协议、主机、端口、用户名或密码后，资源回到“待验证”，需重新验证才能售卖。</Callout>}
-        {!editing && (
-          <Segmented
-            value={f.mode}
-            onChange={(v) => set('mode', v as FormState['mode'])}
-            options={[
-              { value: 'url', label: '粘贴地址' },
-              { value: 'fields', label: '逐项填写' },
-            ]}
-          />
-        )}
-        {f.mode === 'url' && !editing ? (
-          <label className="field">
-            <span className="field-label">上游地址</span>
-            <Input aria-label="上游地址" className="mono" value={f.url} onChange={(e) => set('url', e.target.value)} placeholder="socks5://user:pass@gw.example.net:1080" />
-          </label>
-        ) : (
-          <div className="form-grid">
-            <label className="field">
-              <span className="field-label">协议</span>
-              <Select aria-label="协议" value={f.protocol} onChange={(v) => set('protocol', v)} options={['http', 'https', 'socks5'].map((x) => ({ value: x, label: x.toUpperCase() }))} />
-            </label>
-            <label className="field">
-              <span className="field-label">端口</span>
-              <InputNumber aria-label="端口" min={1} max={65535} value={f.port} onChange={(v) => set('port', v)} style={{ width: '100%' }} />
-            </label>
-            <label className="field full" style={{ marginTop: 12 }}>
-              <span className="field-label">主机</span>
-              <Input aria-label="主机" className="mono" value={f.host} onChange={(e) => set('host', e.target.value)} />
-            </label>
-            <label className="field" style={{ marginTop: 12 }}>
-              <span className="field-label">用户名</span>
-              <Input aria-label="用户名" value={f.username} onChange={(e) => set('username', e.target.value)} autoComplete="off" />
-            </label>
-            <label className="field" style={{ marginTop: 12 }}>
-              <span className="field-label">密码{editing && <em>{editing.hasPassword ? '已设置，留空不改' : '未设置'}</em>}</span>
-              <Input.Password aria-label="上游密码" value={f.password} onChange={(e) => set('password', e.target.value)} autoComplete="new-password" />
-            </label>
-          </div>
-        )}
-        <div className="form-grid">
-          <label className="field">
-            <span className="field-label">节点</span>
-            <Select aria-label="节点" value={f.nodeId} onChange={(v) => set('nodeId', v)} options={nodes} disabled={!!editing} />
-          </label>
-          <label className="field">
-            <span className="field-label">国家</span>
-            <Select aria-label="国家" value={f.countryCode} onChange={(v) => set('countryCode', v)} options={COUNTRIES} />
-          </label>
-          <label className="field" style={{ marginTop: 12 }}>
-            <span className="field-label">城市</span>
-            <Input aria-label="城市" value={f.city} onChange={(e) => set('city', e.target.value)} />
-          </label>
-          <label className="field" style={{ marginTop: 12 }}>
-            <span className="field-label">供应商</span>
-            <Input aria-label="供应商" value={f.provider} onChange={(e) => set('provider', e.target.value)} />
-          </label>
-          <label className="field full" style={{ marginTop: 12 }}>
-            <span className="field-label">备注</span>
-            <Input aria-label="备注" value={f.note} onChange={(e) => set('note', e.target.value)} />
-          </label>
-        </div>
-        {error && <Callout tone="stop">{error}</Callout>}
-      </div>
-    </Modal>
   )
 }
 

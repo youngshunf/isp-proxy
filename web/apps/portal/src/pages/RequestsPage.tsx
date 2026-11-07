@@ -2,14 +2,22 @@ import { ArrowRightOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Result, Skeleton } from 'antd'
 import { Link } from 'react-router'
-import { api, errorText, qk } from '../app/api'
+import { exitRequestOpen } from '@isp/api-client'
+import { POLL_MS, api, errorText, qk } from '../app/api'
+import { useTitle } from '../app/Shell'
 import { StateMark } from '@isp/ui'
 import { Plate } from '@isp/ui'
 import { fmtDate } from '../lib/format'
 import { EXIT_REASON, EXIT_REQUEST } from '../lib/status'
 
 export default function RequestsPage() {
-  const q = useQuery({ queryKey: qk.requests, queryFn: () => api.listExitRequests() })
+  useTitle('换出口申请')
+  // 待处理、处理中按 POLL_MS 轮询，全部进入终态后停止。
+  const q = useQuery({
+    queryKey: qk.requests,
+    queryFn: () => api.listExitRequests(),
+    refetchInterval: (query) => (query.state.data?.some(exitRequestOpen) ? POLL_MS : false),
+  })
   return (
     <>
       <div className="page-head">

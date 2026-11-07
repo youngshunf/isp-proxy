@@ -2,7 +2,9 @@ import { ArrowLeftOutlined, CheckOutlined, CopyOutlined } from '@ant-design/icon
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Popconfirm, Result, Skeleton } from 'antd'
 import { Link, useNavigate, useParams } from 'react-router'
-import { api, errorText, qk } from '../app/api'
+import { orderInFlight } from '@isp/api-client'
+import { POLL_MS, api, errorText, qk } from '../app/api'
+import { useTitle } from '../app/Shell'
 import { StateMark } from '@isp/ui'
 import { Plate } from '@isp/ui'
 import { useCopy } from '../components/useCopy'
@@ -15,7 +17,13 @@ export default function OrderDetailPage() {
   const qc = useQueryClient()
   const { message } = App.useApp()
   const { copied, announce, copy } = useCopy()
-  const q = useQuery({ queryKey: qk.order(id), queryFn: () => api.getOrder(id) })
+  // 待核款、开通中/入账中按 POLL_MS 轮询，进入终态（已交付、已取消、已退款、开通失败）停止。
+  const q = useQuery({
+    queryKey: qk.order(id),
+    queryFn: () => api.getOrder(id),
+    refetchInterval: (query) => (query.state.data && orderInFlight(query.state.data) ? POLL_MS : false),
+  })
+  useTitle(q.data ? `订单 ${q.data.no}` : '订单')
   const catalog = useQuery({ queryKey: qk.catalog, queryFn: () => api.getCatalog(), staleTime: 5 * 60_000 })
   const done = (text: string) => () => {
     void qc.invalidateQueries({ queryKey: qk.orders })

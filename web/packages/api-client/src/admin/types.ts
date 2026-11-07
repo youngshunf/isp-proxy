@@ -1,64 +1,20 @@
 // 管理端 API 的类型：全部从 api/openapi.yaml 生成的 schema.ts 推导，不手写字段。
 // AdminApi 的方法名即 operationId（docs/05 §5），参数统一为一个对象：路径参数平铺，另加 query、body、idempotencyKey。
 import type { components, operations } from '../generated/schema'
+import type { OpInput, OpMethod, OpResult } from '../ops'
 
 export type Schemas = components['schemas']
 
 /** 管理端全部操作（operationId 以 admin 开头）。 */
 export type AdminOp = Extract<keyof operations, `admin${string}`>
 
-type Params<O extends AdminOp> = operations[O]['parameters']
-
-type PathPart<O extends AdminOp> = Params<O> extends { path: infer P } ? (P extends object ? P : {}) : {}
-
-type QueryPart<O extends AdminOp> = Params<O> extends { query: infer Q }
-  ? { query: Q }
-  : Params<O> extends { query?: infer Q }
-    ? [NonNullable<Q>] extends [never]
-      ? {}
-      : { query?: NonNullable<Q> }
-    : {}
-
-type IdemPart<O extends AdminOp> = Params<O> extends { header: infer H }
-  ? 'Idempotency-Key' extends keyof H
-    ? {
-        /** 每次用户意图生成一次（如打开对话框时），重试时复用；同一键不同请求体返回 409。 */
-        idempotencyKey: string
-      }
-    : {}
-  : {}
-
-type BodyPart<O extends AdminOp> = operations[O] extends { requestBody: { content: { 'application/json': infer B } } }
-  ? { body: B }
-  : operations[O] extends { requestBody?: { content: { 'application/json': infer B } } }
-    ? [B] extends [never]
-      ? {}
-      : unknown extends B
-        ? {}
-        : { body?: B }
-    : {}
-
-type Simplify<T> = { [K in keyof T]: T[K] } & {}
-
-/** 一个操作的入参：路径参数 + query + body + 幂等键。 */
-export type AdminInput<O extends AdminOp> = Simplify<PathPart<O> & QueryPart<O> & BodyPart<O> & IdemPart<O>>
-
-type JsonOf<R> = R extends { content: { 'application/json': infer T } } ? T : never
+/** 一个操作的入参：路径参数 + query + body + 幂等键（推导见 ../ops.ts）。 */
+export type AdminInput<O extends AdminOp> = OpInput<O>
 
 /** 一个操作的成功响应体（204 为 void）。 */
-export type AdminResult<O extends AdminOp> = operations[O]['responses'] extends infer R
-  ? 200 extends keyof R
-    ? JsonOf<R[200]>
-    : 201 extends keyof R
-      ? JsonOf<R[201]>
-      : 202 extends keyof R
-        ? JsonOf<R[202]>
-        : void
-  : never
+export type AdminResult<O extends AdminOp> = OpResult<O>
 
-export type AdminMethod<O extends AdminOp> = {} extends AdminInput<O>
-  ? (input?: AdminInput<O>) => Promise<AdminResult<O>>
-  : (input: AdminInput<O>) => Promise<AdminResult<O>>
+export type AdminMethod<O extends AdminOp> = OpMethod<O>
 
 /** 管理后台的全部业务接口。真实实现见 createAdminApi，内存实现见 createMockAdminApi。 */
 export type AdminApi = { [O in AdminOp]: AdminMethod<O> }

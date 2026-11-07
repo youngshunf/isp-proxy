@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Form, Input } from 'antd'
-import { useNavigate } from 'react-router'
 import { api, errorText, qk } from '../app/api'
+import { useTitle } from '../app/Shell'
 import { StateMark } from '@isp/ui'
 import { Plate } from '@isp/ui'
 import { TZ_LABEL, fmtDate } from '../lib/format'
@@ -15,16 +15,16 @@ interface PwValues {
 export default function AccountPage() {
   const session = useQuery({ queryKey: qk.session, queryFn: () => api.session() })
   const qc = useQueryClient()
-  const navigate = useNavigate()
   const { message } = App.useApp()
   const [form] = Form.useForm<PwValues>()
+  useTitle('账号')
   const change = useMutation({
     mutationFn: (v: PwValues) => api.changePassword(v.current, v.next),
-    onSuccess: async () => {
-      message.success('登录密码已修改，请重新登录')
-      await api.logout()
+    // 服务端撤销其他全部会话、当前会话换发新令牌：本机保持登录，缓存整体清掉后重新读取（docs/05 §6 第 2 步）。
+    onSuccess: () => {
+      form.resetFields()
       qc.clear()
-      navigate('/login', { replace: true })
+      message.success('登录密码已修改，其他设备上的登录已失效')
     },
   })
   const a = session.data

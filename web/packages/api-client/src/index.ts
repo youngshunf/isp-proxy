@@ -1,223 +1,46 @@
-// 用户前台 API 契约（原型手写版）。
-// 正式实现由 Go 后端产出 OpenAPI，再生成本文件中的类型；字段语义以 docs/01 为准。
+// 用户前台 API：实体类型全部取自 api/openapi.yaml 生成的 schema.ts（F-W1），字段语义以 docs/01 为准。
+// 真实客户端见 createPortalApi（./portal），内存 mock 见 '@isp/api-client/mock'，两者实现同一个 PortalApi。
 // 约定：时间为 ISO 8601 字符串；流量为字节；金额为最小货币单位（分）。
 // 剩余时长由服务端按自身时钟算出（remainingSeconds），前端不依赖本机时钟判断可用性。
 
-export type Lifecycle = 'pending' | 'fulfill_failed' | 'active' | 'retained' | 'released'
+import type { components } from './generated/schema'
 
+type S = components['schemas']
+
+export type Lifecycle = S['Lifecycle']
 /** 阻断原因，数组按 docs/01 §7.2 的展示优先级排列；空数组表示可用。 */
-export type Blocker =
-  | 'account_banned'
-  | 'released'
-  | 'admin_paused'
-  | 'pending'
-  | 'fulfill_failed'
-  | 'expired'
-  | 'traffic_exhausted'
-  | 'changing'
-  | 'dataplane'
-
-export type ExitCheck = 'ok' | 'slow' | 'failed' | 'stale'
-
-export interface Exit {
-  version: number
-  ip: string
-  /** ISO 3166-1 alpha-2，小写，例如 us；用于国旗与筛选。 */
-  countryCode: string
-  country: string
-  city: string
-  check: ExitCheck
-  latencyMs: number | null
-  checkedAt: string
-}
-
-export type AccessField = 'ports' | 'password'
-
-export interface Access {
-  version: number
-  host: string
-  username: string
-  password: string
-  ports: { http: number; https: number; socks5: number }
-  issuedAt: string
-  /** 最近一次换接入改动、用户尚未确认的字段。 */
-  unseenChanges: AccessField[]
-}
-
-export interface Subscription {
-  id: string
-  name: string
-  plan: { name: string; countryCode: string; country: string; city: string; concurrency: number; bandwidthMbps: number }
-  lifecycle: Lifecycle
-  blockers: Blocker[]
-  time: {
-    periodDays: number
-    startedAt: string | null
-    expiresAt: string | null
-    remainingSeconds: number
-    retentionEndsAt: string | null
-  }
-  traffic: { totalBytes: number; usedBytes: number }
-  exit: Exit | null
-  access: Access | null
-  quotas: {
-    accessChangesLeft: number
-    accessChangesPerDay: number
-    freeExitChangesLeft: number
-    freeExitWindowEndsAt: string | null
-  }
-  openExitRequestId: string | null
-  openOrderIds: string[]
-}
-
-export type SubscriptionEventKind =
-  | 'ready'
-  | 'time_added'
-  | 'traffic_added'
-  | 'password_reset'
-  | 'access_changed'
-  | 'exit_changed'
-  | 'expired'
-  | 'exhausted'
-  | 'renamed'
-
-export interface SubscriptionEvent {
-  id: string
-  at: string
-  kind: SubscriptionEventKind
-  detail: string
-  orderNo?: string
-}
-
-export interface Money {
-  amount: number
-  currency: 'CNY'
-}
-
-export type StockLevel = 'plenty' | 'low' | 'out'
-
-export interface Plan {
-  id: string
-  /** ISO 3166-1 alpha-2，小写。 */
-  countryCode: string
-  country: string
-  city: string
-  monthlyPrice: Money
-  includedBytes: number
-  concurrency: number
-  bandwidthMbps: number
-  stock: StockLevel
-}
-
-export interface TrafficPack {
-  id: string
-  bytes: number
-  price: Money
-}
-
-export interface Rules {
-  version: string
-  periodDays: number
-  retentionDays: number
-  accessChangesPerDay: number
-  freeExitChangesPer30Days: number
-  unpaidHoldHours: number
-  maxUnpaidNewOrders: number
-}
-
-export interface Catalog {
-  plans: Plan[]
-  trafficPacks: TrafficPack[]
-  monthOptions: number[]
-  rules: Rules
-  payment: { payee: string; bank: string; account: string; note: string }
-}
-
-export type OrderKind = 'new' | 'renew_time' | 'add_traffic'
-export type PaymentStatus = 'awaiting' | 'confirmed' | 'cancelled' | 'refund_review' | 'refunded'
-export type FulfillmentStatus = 'not_started' | 'processing' | 'delivered' | 'failed'
-
-export interface OrderLine {
-  label: string
-  detail: string
-  amount: Money
-}
-
-export interface OrderStep {
-  label: string
-  state: 'done' | 'current' | 'todo' | 'failed'
-  at: string | null
-}
-
-export interface Order {
-  id: string
-  no: string
-  kind: OrderKind
-  createdAt: string
-  holdUntil: string | null
-  amount: Money
-  payment: PaymentStatus
-  fulfillment: FulfillmentStatus
-  userClaimedPaidAt: string | null
-  payRef: string
-  subscriptionId: string | null
-  subscriptionName: string | null
-  lines: OrderLine[]
-  steps: OrderStep[]
-  /** 下单时保存的规则快照，套餐改价或下架不追溯（R-09.9）。 */
-  rulesSnapshot: string[]
-}
-
-export type OrderInput =
-  | { kind: 'new'; planId: string; months: number; quantity: number }
-  | { kind: 'renew_time'; subscriptionId: string; months: number }
-  | { kind: 'add_traffic'; subscriptionId: string; packId: string }
-
-export type ExitReason = 'target_blocked' | 'quality' | 'region' | 'other'
-export type ExitRequestStatus = 'pending' | 'processing' | 'succeeded' | 'failed' | 'cancelled'
-
-export interface ExitRequest {
-  id: string
-  no: string
-  subscriptionId: string
-  subscriptionName: string
-  createdAt: string
-  updatedAt: string
-  reason: ExitReason
-  note: string
-  alsoChangeAccess: boolean
-  charge: 'free' | 'manual'
-  status: ExitRequestStatus
-  oldIp: string
-  newIp: string | null
-  failureReason: string | null
-}
-
-export interface ExitRequestInput {
-  subscriptionId: string
-  reason: ExitReason
-  note: string
-  alsoChangeAccess: boolean
-}
-
-export interface Account {
-  email: string
-  verified: boolean
-  status: 'active' | 'banned'
-  createdAt: string
-}
+export type Blocker = S['Blocker']
+export type ExitCheck = S['ExitCheck']
+export type Exit = S['Exit']
+export type AccessField = S['AccessField']
+export type Access = S['Access']
+export type Subscription = S['Subscription']
+export type SubscriptionEventKind = S['SubscriptionEventKind']
+export type SubscriptionEvent = S['SubscriptionEvent']
+export type Money = S['Money']
+export type StockLevel = S['StockLevel']
+export type Plan = S['Plan']
+export type TrafficPack = S['TrafficPack']
+export type Rules = S['Rules']
+export type PaymentInstructions = S['PaymentInstructions']
+export type Catalog = S['Catalog']
+export type OrderKind = S['OrderKind']
+export type PaymentStatus = S['PaymentStatus']
+export type FulfillmentStatus = S['FulfillmentStatus']
+export type OrderLine = S['OrderLine']
+export type OrderStep = S['OrderStep']
+export type Order = S['Order']
+/** 下单入参。新购 quantity 只能为 1（D-13，一次订单一个订阅）。 */
+export type OrderInput = S['OrderInput']
+export type ExitReason = S['ExitReason']
+export type ExitRequestStatus = S['ExitRequestStatus']
+export type ExitRequest = S['ExitRequest']
+export type ExitRequestInput = S['ExitRequestInput']
+export type Account = S['Account']
+export type ChangeAccessMode = S['ChangeAccessInput']['mode']
 
 /** 错误码，与 OpenAPI ErrorCode 完全一致（forbidden：CSRF 校验失败或管理端权限不足）。 */
-export type ApiErrorCode =
-  | 'unauthorized'
-  | 'unverified'
-  | 'forbidden'
-  | 'rate_limited'
-  | 'conflict'
-  | 'quota_exhausted'
-  | 'not_found'
-  | 'invalid'
-  | 'precondition'
+export type ApiErrorCode = S['ErrorCode']
 
 /** 服务端给出的可选恢复动作，例如“去续时长”。 */
 export interface ApiErrorAction {
@@ -261,13 +84,24 @@ export const STATUS_OF: Record<ApiErrorCode, number> = {
   rate_limited: 429,
 }
 
+/**
+ * 用户前台的全部业务接口，方法名即 operationId（docs/05 §5）。
+ * 带幂等键的写操作（下单、换接入、换出口申请）由调用方按“一次用户意图一个键”传入，重试时复用。
+ */
 export interface PortalApi {
+  /** GET /api/me；未登录（401）返回 null。 */
   session(): Promise<Account | null>
   login(email: string, password: string): Promise<Account>
+  /** 注册不建会话（不泄露邮箱是否已注册）；随后用 verifyEmail(code, email) 验证即登录。 */
   register(email: string, password: string): Promise<{ email: string }>
-  verifyEmail(code: string): Promise<Account>
-  resendVerification(): Promise<void>
+  /** 已登录（未验证）时只传 code；未登录时必须带 email，成功即登录。 */
+  verifyEmail(code: string, email?: string): Promise<Account>
+  /** 已登录时发给本人；未登录时传 email（结果一律成功，不泄露是否注册）。 */
+  resendVerification(email?: string): Promise<void>
   requestPasswordReset(email: string): Promise<void>
+  /** 用邮件验证码设置新密码，成功后撤销该账号全部会话（需重新登录）。 */
+  confirmPasswordReset(email: string, code: string, newPassword: string): Promise<void>
+  /** 改密撤销其他会话，当前会话换发新令牌（仍保持登录）。 */
   changePassword(current: string, next: string): Promise<void>
   logout(): Promise<void>
 
@@ -275,18 +109,35 @@ export interface PortalApi {
   getSubscription(id: string): Promise<Subscription>
   listSubscriptionEvents(id: string): Promise<SubscriptionEvent[]>
   renameSubscription(id: string, name: string): Promise<Subscription>
-  changeAccess(id: string, mode: 'password' | 'ports_and_password'): Promise<Access>
+  changeAccess(id: string, mode: ChangeAccessMode, idempotencyKey: string): Promise<Access>
   acknowledgeAccess(id: string): Promise<void>
 
   getCatalog(): Promise<Catalog>
-  createOrder(input: OrderInput): Promise<Order>
+  createOrder(input: OrderInput, idempotencyKey: string): Promise<Order>
   listOrders(): Promise<Order[]>
   getOrder(id: string): Promise<Order>
   claimPaid(id: string): Promise<Order>
   cancelOrder(id: string): Promise<Order>
 
   listExitRequests(): Promise<ExitRequest[]>
-  createExitRequest(input: ExitRequestInput): Promise<ExitRequest>
+  createExitRequest(input: ExitRequestInput, idempotencyKey: string): Promise<ExitRequest>
+}
+
+/** 每次用户意图一个幂等键（打开对话框或进入下单页时生成，重试复用，成功后换新）。 */
+export function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return `k-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+/** 订单是否还会变化（待核款、开通中/入账中）；终态时停止轮询。 */
+export function orderInFlight(o: Pick<Order, 'payment' | 'fulfillment'>): boolean {
+  if (o.payment === 'awaiting' || o.payment === 'refund_review') return true
+  return o.payment === 'confirmed' && (o.fulfillment === 'not_started' || o.fulfillment === 'processing')
+}
+
+/** 换出口申请是否未完成。 */
+export function exitRequestOpen(r: Pick<ExitRequest, 'status'>): boolean {
+  return r.status === 'pending' || r.status === 'processing'
 }
 
 export type Protocol = 'http' | 'https' | 'socks5'

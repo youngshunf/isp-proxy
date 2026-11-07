@@ -3,7 +3,9 @@ import { useQuery } from '@tanstack/react-query'
 import { Button, Result, Skeleton } from 'antd'
 import { Link } from 'react-router'
 import type { Order } from '@isp/api-client'
-import { api, errorText, qk } from '../app/api'
+import { orderInFlight } from '@isp/api-client'
+import { POLL_MS, api, errorText, qk } from '../app/api'
+import { useTitle } from '../app/Shell'
 import { Plate } from '@isp/ui'
 import { fmtDate, fmtMoney } from '../lib/format'
 import { FULFILLMENT, PAYMENT } from '../lib/status'
@@ -34,7 +36,12 @@ export function OrderChips({ o }: { o: Order }) {
 }
 
 export default function OrdersPage() {
-  const q = useQuery({ queryKey: qk.orders, queryFn: () => api.listOrders() })
+  useTitle('订单')
+  const q = useQuery({
+    queryKey: qk.orders,
+    queryFn: () => api.listOrders(),
+    refetchInterval: (query) => (query.state.data?.some(orderInFlight) ? POLL_MS : false),
+  })
   return (
     <>
       <div className="page-head">

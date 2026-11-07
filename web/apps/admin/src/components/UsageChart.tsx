@@ -6,7 +6,7 @@ import * as echarts from 'echarts/core'
 import { SVGRenderer } from 'echarts/renderers'
 import { useEffect, useRef } from 'react'
 import type { UsageSeries } from '@isp/api-client/admin'
-import { FONT_SANS, fmtBytes, fmtDateTime } from '@isp/ui'
+import { FONT_SANS, fmtBytesFine, fmtDateTime } from '@isp/ui'
 import { bucketKind, bucketLabel } from '../lib/usageView'
 
 echarts.use([BarChart, CustomChart, GridComponent, TooltipComponent, MarkAreaComponent, SVGRenderer])
@@ -57,8 +57,10 @@ export default function UsageChart({ series, height = 240 }: { series: UsageSeri
       yAxis: {
         type: 'value',
         min: 0,
+        // 字节是整数：全为 0 或很小时不出现 0.25 B 之类的刻度
+        minInterval: 1,
         splitNumber: 3,
-        axisLabel: { color: INK_3, fontSize: 11, formatter: (v: number) => (v === 0 ? '0' : fmtBytes(v)) },
+        axisLabel: { color: INK_3, fontSize: 11, formatter: (v: number) => (v === 0 ? '0' : fmtBytesFine(v)) },
         splitLine: { lineStyle: { color: LINE_2 } },
       },
       tooltip: {
@@ -73,7 +75,7 @@ export default function UsageChart({ series, height = 240 }: { series: UsageSeri
           if (!x) return ''
           const head = `<div style="color:${INK_3}">${fmtDateTime(x.p.at)} 起 ${bucketLabel(series.bucketSeconds)}</div>`
           if (x.k === 'gap') return `${head}<b>无样本</b><div style="color:${INK_3}">没有上报，不是 0</div>`
-          const v = x.k === 'zero' ? '0 B（有样本）' : fmtBytes(x.p.bytes!)
+          const v = x.k === 'zero' ? '0 B（有样本）' : fmtBytesFine(x.p.bytes!)
           return `${head}<b>${v}</b><div style="color:${INK_3}">峰值连接 ${x.p.maxConns ?? '—'} · 样本 ${x.p.samples}</div>`
         },
       },

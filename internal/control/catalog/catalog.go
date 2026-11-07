@@ -166,6 +166,7 @@ type Payment struct {
 
 // Catalog 是 OpenAPI Catalog。
 type Catalog struct {
+	Brand        string     `json:"brand"`
 	Plans        []PlanView `json:"plans"`
 	TrafficPacks []PackView `json:"trafficPacks"`
 	MonthOptions []int      `json:"monthOptions"`
@@ -180,7 +181,7 @@ func (s *Service) GetCatalog(ctx context.Context) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Catalog{Plans: []PlanView{}, TrafficPacks: []PackView{}, MonthOptions: []int{},
+	c := &Catalog{Brand: s.env.Cfg.Brand, Plans: []PlanView{}, TrafficPacks: []PackView{}, MonthOptions: []int{},
 		Rules: RulesView{Version: rules.Version, PeriodDays: rules.PeriodDays, RetentionDays: rules.RetentionDays,
 			AccessChangesPerDay: rules.AccessChangesPerWindow, FreeExitChangesPer30Days: rules.FreeExitChangesPerWindow,
 			UnpaidHoldHours: rules.UnpaidHoldHours, MaxUnpaidNewOrders: rules.MaxUnpaidNewOrders},

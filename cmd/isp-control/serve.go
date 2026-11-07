@@ -129,8 +129,10 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer, hooks *serve
 	worker := &mail.Worker{Pool: pool, Box: box, Sender: sender, From: cfg.Mail.From,
 		Brand: mail.Brand{Name: cfg.Mail.Brand, SiteURL: cfg.Mail.SiteURL}, Logger: log}
 	worker.Init()
+	core := cfg.Core.Kernel()
+	core.Brand = cfg.Mail.Brand // 目录接口返回给前台的品牌名，与邮件署名一致
 	deps := api.Deps{Pool: pool, Box: box, Cookies: session.Cookies{Secure: cfg.SecureCookies},
-		Mail: worker, Issuer: cfg.TOTPIssuer, Logger: log, Core: cfg.Core.Kernel()}
+		Mail: worker, Issuer: cfg.TOTPIssuer, Logger: log, Core: core}
 	var devClock *offsetClock
 	if cfg.Dev.Enabled() {
 		log.Warn("已启用 dev 配置（只用于开发与平台 E2E，生产不得配置）", "clock_offset_file", cfg.Dev.ClockOffsetFile)

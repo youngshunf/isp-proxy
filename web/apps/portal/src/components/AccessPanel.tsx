@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { PROTOCOLS, connectionString, type Access, type Subscription } from '@isp/api-client'
 import { api, errorText, qk } from '../app/api'
 import { fmtDate } from '../lib/format'
+import { useIntentKey } from '../lib/intent'
 import { Plate } from '@isp/ui'
 import { PROTO_LABEL } from './ProtocolCopy'
 import { useCopy } from './useCopy'
@@ -32,10 +33,14 @@ function ChangeAccessDialog({
   onDone: (a: Access) => void
 }) {
   const qc = useQueryClient()
+  // 打开对话框即一次意图：同一模式重试（双击、网络失败）复用同一个幂等键，只换一次接入。
+  const intent = useIntentKey()
   const change = useMutation({
-    mutationFn: () => api.changeAccess(sub.id, mode),
+    mutationFn: (m: Mode) => api.changeAccess(sub.id, m, intent.keyFor({ sub: sub.id, mode: m })),
     onSuccess: (a) => {
+      intent.reset()
       qc.setQueryData<Subscription>(qk.sub(sub.id), (old) => (old ? { ...old, access: a } : old))
+      // 节点应用新接入前订阅带 changing，刷新详情以显示并开始轮询。
       void qc.invalidateQueries({ queryKey: qk.subs })
       onDone(a)
     },
@@ -47,7 +52,7 @@ function ChangeAccessDialog({
       title={`换接入 · ${sub.name}`}
       okText={mode === 'password' ? '确认重置密码' : '确认更换端口与密码'}
       cancelText="取消"
-      onOk={() => change.mutate()}
+      onOk={() => !change.isPending && change.mutate(mode)}
       onCancel={onClose}
       okButtonProps={{ loading: change.isPending, disabled: left <= 0 }}
       mask={{ closable: !change.isPending }}

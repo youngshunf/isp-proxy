@@ -2675,8 +2675,9 @@ components:
         note: {type: string}
     Catalog:
       type: object
-      required: [plans, trafficPacks, monthOptions, rules, payment]
+      required: [brand, plans, trafficPacks, monthOptions, rules, payment]
       properties:
+        brand: {type: string, description: 对客户展示的品牌名（控制面配置 mail.brand，默认“ISP 代理”）；前台页头与标题使用，不写死在前端}
         plans:
           type: array
           items: {$ref: '#/components/schemas/Plan'}
