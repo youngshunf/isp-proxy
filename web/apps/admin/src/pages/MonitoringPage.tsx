@@ -1,13 +1,16 @@
 // 节点与监控（R-12、R-19）：节点在线、配置版本、计量持久化、时钟偏差、端口池；单个订阅的用量趋势。
 // 节点没有上报时写“无数据”，不写 0；趋势图的断联 / 空数据 / 零值 / 过期分开表达（A-37）。
+// 节点在这里登记（名称、公共地址、端口池）和修改（名称、公共地址、状态）。
+import { EditOutlined, PlusOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { Select } from 'antd'
+import { Button, Select } from 'antd'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import type { Node } from '@isp/api-client/admin'
 import { Plate, StateMark } from '@isp/ui'
 import { qk, useApi } from '../app/api'
 import { Ago, LoadError, Loading, Mono, PageHead, State } from '../components/bits'
+import { NodeDialog } from '../components/NodeDialog'
 import { UsageTrend } from '../components/UsageTrend'
 
 function nodeState(n: Node) {
@@ -20,9 +23,18 @@ function nodeState(n: Node) {
 export default function MonitoringPage() {
   const api = useApi()
   const nodes = useQuery({ queryKey: qk.nodes, queryFn: () => api.adminListNodes(), refetchInterval: 15_000 })
+  const [editing, setEditing] = useState<Node | 'new' | null>(null)
   return (
     <>
-      <PageHead title="节点与监控" sub="节点每 ≤ 5 秒上报一次累计用量；最近 15 秒内有上报为“实时”，否则为“过期”。" />
+      <PageHead
+        title="节点与监控"
+        sub="节点每 ≤ 5 秒上报一次累计用量；最近 15 秒内有上报为“实时”，否则为“过期”。"
+        extra={
+          <Button icon={<PlusOutlined />} onClick={() => setEditing('new')}>
+            登记节点
+          </Button>
+        }
+      />
       <div className="stack">
         <Plate title="节点">
           {nodes.isPending ? (
@@ -32,7 +44,7 @@ export default function MonitoringPage() {
           ) : (
             <div className="nodes" style={{ marginTop: 12 }}>
               {nodes.data.map((n) => (
-                <NodeCard key={n.id} n={n} />
+                <NodeCard key={n.id} n={n} onEdit={() => setEditing(n)} />
               ))}
             </div>
           )}
@@ -43,11 +55,12 @@ export default function MonitoringPage() {
           </div>
         </Plate>
       </div>
+      <NodeDialog value={editing} onClose={() => setEditing(null)} />
     </>
   )
 }
 
-function NodeCard({ n }: { n: Node }) {
+function NodeCard({ n, onEdit }: { n: Node; onEdit: () => void }) {
   const st = nodeState(n)
   const p = n.ports
   const pct = (x: number) => `${p.total ? (x / p.total) * 100 : 0}%`
@@ -56,7 +69,10 @@ function NodeCard({ n }: { n: Node }) {
     <article className="node" aria-label={`节点 ${n.name}`}>
       <div className="node-head">
         <b>{n.name}</b>
-        <State view={st} />
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <State view={st} />
+          <Button size="small" type="text" icon={<EditOutlined />} onClick={onEdit} aria-label={`修改节点 ${n.name}`} />
+        </span>
       </div>
       <div className="id-line">
         <Mono>{n.id}</Mono>

@@ -1,5 +1,5 @@
-// 换出口页面：被拒的候选写明原因且不能提交；通过的候选走完提交与查结果。
-import { screen, waitFor } from '@testing-library/react'
+// 换出口页面：被拒的候选写明原因且不能提交；通过的候选走完提交与查结果；当场录入候选。
+import { screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { newMock, renderApp, subIdByName } from '../test/renderApp'
 
@@ -12,7 +12,7 @@ describe('换出口流程', () => {
     const { user } = renderApp(`/subscriptions/${id}/exit-change`, api)
 
     // 1. 候选录入：gw-c4 的出口与“纽约 2 号”相同
-    await user.click(await screen.findByLabelText(/选择 gw-c4/))
+    await user.click(await screen.findByLabelText(/选择 .*gw-c4/))
     await user.click(screen.getByRole('button', { name: '开始验证' }))
     // 2~3. 验证完成后进入比较，列出被拒原因
     expect(await screen.findByText(/已被平台内其他订阅使用/, {}, { timeout: 4000 })).toBeTruthy()
@@ -21,7 +21,7 @@ describe('换出口流程', () => {
 
     // 回到候选录入，选一个合格的
     await user.click(screen.getByRole('button', { name: /换一个候选/ }))
-    await user.click(await screen.findByLabelText(/选择 gw-c1/))
+    await user.click(await screen.findByLabelText(/选择 .*gw-c1/))
     await user.click(screen.getByRole('button', { name: '开始验证' }))
     await user.click(await screen.findByRole('button', { name: '下一步：提交' }, { timeout: 4000 }))
 
@@ -44,9 +44,26 @@ describe('换出口流程', () => {
     const api = newMock()
     const id = await subIdByName(api, 'TikTok 美区 1 号')
     const { user } = renderApp(`/subscriptions/${id}/exit-change`, api)
-    await user.click(await screen.findByLabelText(/选择 gw-c3/))
+    await user.click(await screen.findByLabelText(/选择 .*gw-c3/))
     await user.click(screen.getByRole('button', { name: '开始验证' }))
     expect(await screen.findByText(/与当前出口相同/, {}, { timeout: 4000 })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '下一步：提交' })).toBeNull()
+  })
+
+  it('库存里没有合适候选：当场录入（按订阅节点与地区预填），录入后直接选中', async () => {
+    const api = newMock()
+    const id = await subIdByName(api, 'TikTok 美区 1 号')
+    const sub = await api.adminGetSubscription({ subscriptionId: id })
+    const { user } = renderApp(`/subscriptions/${id}/exit-change`, api)
+    await user.click(await screen.findByRole('button', { name: /录入新候选/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect((within(dialog).getByLabelText('城市') as HTMLInputElement).value).toBe(sub.plan.city)
+    await user.type(within(dialog).getByLabelText('上游地址'), 'socks5://u1:p1@gw-new.example.net:1080')
+    await user.click(within(dialog).getByRole('button', { name: '录入' }))
+    const radio = await screen.findByLabelText('选择 socks5://gw-new.example.net:1080', {}, { timeout: 3000 })
+    await waitFor(() => expect((radio as HTMLInputElement).checked).toBe(true))
+    const created = (await api.adminListUpstreams({ query: { q: 'gw-new' } })).items[0]!
+    expect(created).toMatchObject({ nodeId: sub.nodeId, countryCode: sub.plan.countryCode, status: 'pending_verify' })
+    expect(isDisabled(screen.getByRole('button', { name: '开始验证' }))).toBe(false)
   })
 })

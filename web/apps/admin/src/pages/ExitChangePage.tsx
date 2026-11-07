@@ -1,4 +1,5 @@
 // 换出口（docs/05 F-W3）：候选录入 → 验证 → 比较 → 提交 → 查结果。
+// 库存里没有合适候选时可以当场录入：按订阅的节点与套餐地区预填，录入后直接选中。
 // 候选必须由节点经实际链路测出出口 IP；与当前出口相同（“上游已更新但出口没变”）、平台内已占用、国家不符都会被拒，并写明原因。
 // 提交时带比较探测的 ID 和幂等键：同一次比较只能提交一次，重试不会建出两个任务。
 import { ArrowLeftOutlined, CheckOutlined, CloseOutlined, LoadingOutlined, PlusOutlined } from '@ant-design/icons'
@@ -10,6 +11,7 @@ import type { AdminSubscriptionDetail, Upstream } from '@isp/api-client/admin'
 import { CountryFlag, Plate, StateMark, fmtDateTime } from '@isp/ui'
 import { errorText, newIdempotencyKey, qk, useApi } from '../app/api'
 import { Callout, LoadError, Loading, Mono, PageHead, State } from '../components/bits'
+import { UpstreamDialog } from '../components/UpstreamDialog'
 import { STEPS, canSubmit, initialWizard, makeWizardReducer, type WizardState } from '../lib/exitWizard'
 import { useProbe, useTask } from '../lib/jobs'
 import { EXIT_REASON, TASK_KIND, TASK_STATE, UPSTREAM } from '../lib/status'
@@ -96,6 +98,8 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: AdminSubscriptionDeta
   const api = useApi()
   const [sameCountry, setSameCountry] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const nodes = useQuery({ queryKey: qk.nodes, queryFn: () => api.adminListNodes(), enabled: adding })
   const cands = useQuery({
     queryKey: [...qk.upstreams, 'candidates', sameCountry ? s.plan.countryCode : 'all'],
     queryFn: () => api.adminListUpstreams({ query: { status: ['available', 'pending_verify'], countryCode: sameCountry ? s.plan.countryCode : undefined, limit: 100 } }),
@@ -125,11 +129,9 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: AdminSubscriptionDeta
             <Switch size="small" checked={sameCountry} onChange={setSameCountry} aria-label="只看套餐国家" />
             只看 {s.plan.countryCode.toUpperCase()}
           </label>
-          <Link to="/upstreams?new=1">
-            <Button size="small" icon={<PlusOutlined />}>
-              录入新上游
-            </Button>
-          </Link>
+          <Button size="small" icon={<PlusOutlined />} onClick={() => setAdding(true)} disabled={disabled}>
+            录入新候选
+          </Button>
         </span>
       </div>
       {cands.isPending ? (
@@ -145,7 +147,7 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: AdminSubscriptionDeta
             locale={{ emptyText: '没有可用候选：先在上游库存录入并验证新资源' }}
             onRow={(u) => ({ onClick: () => dispatch({ type: 'select', resourceId: u.id }), style: { cursor: 'pointer' } })}
             columns={[
-              { title: '', width: 40, render: (_, u) => <Radio value={u.id} aria-label={`选择 ${u.host}`} /> },
+              { title: '', width: 40, render: (_, u) => <Radio value={u.id} aria-label={`选择 ${u.protocol}://${u.host}:${u.port}`} /> },
               {
                 title: '上游',
                 render: (_, u) => (
@@ -199,6 +201,13 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: AdminSubscriptionDeta
           开始验证
         </Button>
       </div>
+      <UpstreamDialog
+        value={adding ? 'new' : null}
+        nodes={(nodes.data ?? []).map((n) => ({ value: n.id, label: n.name }))}
+        defaults={{ ...(s.nodeId ? { nodeId: s.nodeId } : {}), countryCode: s.plan.countryCode, city: s.plan.city }}
+        onClose={() => setAdding(false)}
+        onCreated={(u) => dispatch({ type: 'select', resourceId: u.id })}
+      />
     </>
   )
 }

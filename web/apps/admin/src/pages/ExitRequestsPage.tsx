@@ -1,18 +1,18 @@
 // 换出口申请（R-12）：受理（免费 / 收费 / 免收）、驳回、执行（进入换出口流程并关联申请）、收尾。
-// 超出免费次数的申请必须先决定费用；驳回与失败原因客户可见，内部备注客户不可见。
+// 超出免费次数的申请必须先决定费用；驳回与失败原因客户可见，内部备注客户不可见，任何状态下都可以修改。
 import { useQueryClient } from '@tanstack/react-query'
-import { App, Button, Input, InputNumber, Radio, Space } from 'antd'
+import { App, Button, Input, InputNumber, Modal, Radio, Space } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import type { AdminExitRequest, ExitFeeStatus, ExitRequestStatus } from '@isp/api-client/admin'
 import { Plate, fmtDateTime, fmtMoney } from '@isp/ui'
-import { qk, useApi } from '../app/api'
-import { Mono, PageHead, State, SubLink } from '../components/bits'
+import { errorText, qk, useApi } from '../app/api'
+import { Callout, Mono, PageHead, State, SubLink } from '../components/bits'
 import { ConfirmAction } from '../components/ConfirmAction'
 import { DataTable, arr, str, type Column, type FilterDef } from '../components/DataTable'
 import { EXIT_REASON, EXIT_REQUEST, FEE, options } from '../lib/status'
 
-type Dlg = { kind: 'accept' | 'reject' | 'complete'; r: AdminExitRequest } | null
+type Dlg = { kind: 'accept' | 'reject' | 'complete' | 'note'; r: AdminExitRequest } | null
 
 export default function ExitRequestsPage() {
   const api = useApi()
@@ -95,8 +95,18 @@ export default function ExitRequestsPage() {
       title: '操作',
       fixedVisible: true,
       fixed: 'right',
-      render: (_, r) =>
-        r.status === 'pending' ? (
+      render: (_, r) => (
+        <Space size={4} wrap>
+          {opCell(r)}
+          <Button size="small" type="text" onClick={() => setDlg({ kind: 'note', r })} aria-label={`修改 ${r.no} 的内部备注`}>
+            备注
+          </Button>
+        </Space>
+      ),
+    },
+  ]
+  function opCell(r: AdminExitRequest) {
+    return r.status === 'pending' ? (
           <Space size={4} wrap>
             <Button size="small" type="primary" onClick={() => setDlg({ kind: 'accept', r })}>
               受理
@@ -122,9 +132,8 @@ export default function ExitRequestsPage() {
           </Space>
         ) : (
           <span className="muted small">{r.finishedAt ? fmtDateTime(r.finishedAt) : '—'}</span>
-        ),
-    },
-  ]
+        )
+  }
   return (
     <>
       <PageHead title="换出口申请" sub="客户提交的换出口申请。受理后在“执行换出口”里选候选、验证、比较并提交；任务成功后申请自动完成。" />
@@ -147,6 +156,7 @@ export default function ExitRequestsPage() {
       {dlg?.kind === 'accept' && <AcceptDialog r={dlg.r} onClose={() => setDlg(null)} />}
       {dlg?.kind === 'reject' && <RejectDialog r={dlg.r} onClose={() => setDlg(null)} />}
       {dlg?.kind === 'complete' && <CompleteDialog r={dlg.r} onClose={() => setDlg(null)} />}
+      {dlg?.kind === 'note' && <NoteDialog r={dlg.r} onClose={() => setDlg(null)} />}
     </>
   )
 }
@@ -290,5 +300,45 @@ function CompleteDialog({ r, onClose }: { r: AdminExitRequest; onClose: () => vo
         </label>
       )}
     </ConfirmAction>
+  )
+}
+
+function NoteDialog({ r, onClose }: { r: AdminExitRequest; onClose: () => void }) {
+  const api = useApi()
+  const done = useDone('备注已保存')
+  const [note, setNote] = useState(r.internalNote)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const save = async () => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.adminUpdateExitRequestNote({ exitRequestId: r.id, body: { internalNote: note.trim() } })
+      done()
+      onClose()
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal
+      open
+      title={`内部备注 · ${r.no}`}
+      onCancel={() => !busy && onClose()}
+      onOk={save}
+      okText="保存"
+      cancelText="取消"
+      okButtonProps={{ loading: busy, disabled: note.trim() === r.internalNote.trim() }}
+      destroyOnHidden
+    >
+      <div className="confirm-body">
+        <p className="muted small">只给运营看，客户不可见；修改写入审计。</p>
+        <Input.TextArea aria-label="内部备注" value={note} onChange={(e) => setNote(e.target.value)} autoSize={{ minRows: 3 }} maxLength={1000} showCount />
+        {error && <Callout tone="stop">{error}</Callout>}
+      </div>
+    </Modal>
   )
 }

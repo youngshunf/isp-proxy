@@ -1,5 +1,5 @@
 // 管理后台的数据入口：页面通过 useApi() 取得 AdminApi，测试注入新的 mock 实例。
-// 原型默认用内存 mock；设置 VITE_ADMIN_API=http 时改用真实客户端（同源 /admin-api，反向代理接控制面）。
+// 默认用真实客户端（同源 /admin-api：开发时 Vite 代理、生产时反向代理接到 isp-control）；VITE_ADMIN_API=mock 时改用内存 mock（演示）。
 import { createContext, useContext } from 'react'
 import { ApiError, NetworkError, createAdminApi, type AdminApi } from '@isp/api-client/admin'
 import { MOCK_NOW, createMockAdminApi } from '@isp/api-client/admin/mock'
@@ -16,7 +16,7 @@ export function useApi(): AdminApi {
 export const ServerNowContext = createContext<() => number>(() => Date.now())
 export const useServerNow = () => useContext(ServerNowContext)
 
-export const USE_MOCK = import.meta.env.VITE_ADMIN_API !== 'http'
+export const USE_MOCK = import.meta.env.VITE_ADMIN_API === 'mock'
 
 const MOCK_SESSION_KEY = 'isp-admin:mock-session'
 
