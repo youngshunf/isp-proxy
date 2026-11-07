@@ -26,6 +26,7 @@ make all
 | `cmd/gost/program.go` | Service lifecycle (`Init`/`Start`/`Stop`), config loading, API/metrics/profiling servers, SIGHUP reload |
 | `cmd/gost/register.go` | Blank imports for all built-in handlers, listeners, dialers, connectors — triggers `init()` registration |
 | `cmd/gost/version.go` | Version resolution: ldflags injection → `buildVersionFallback` + short VCS commit → module build info → bare `buildVersionFallback` |
+| `internal/agent/` | ISP 平台节点代理原型：按订阅计量（`meter.go`）、连接表与 GOST 组件注册、失败即拒绝的出口链（`gost.go`）、订阅状态与持久化（`agent.go`、`store.go`）。设计见 `docs/04-计量与执行方案.md`；尚未接入 `cmd/gost` |
 
 ## CLI Flags
 
@@ -63,4 +64,6 @@ All components register via `init()` side-effects in their packages. `cmd/gost/r
 
 ## Tests
 
-Tests are in `tests/e2e/` — integration tests using the built binary. No unit tests. Run with `go test ./tests/e2e/...`.
+E2E tests are in `tests/e2e/` — integration tests using the built binary. Run with `go test ./tests/e2e/...` only when explicitly authorized (see PROJECT.md).
+
+`internal/agent/` has in-process tests on loopback only (fake ISP upstream, no external network): `go test ./internal/agent/` (~3s; add `-race` for concurrency changes). They rely on GOST internals listed in docs/04 §2 — rerun them after any `go-gost/x` upgrade.
