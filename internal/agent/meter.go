@@ -245,6 +245,24 @@ func (c *trackedConn) Close() error {
 	return c.Conn.Close()
 }
 
+// CloseWrite 透传半关闭。GOST 转发一侧结束时对另一侧 CloseWrite（x v0.28.1
+// internal/net/pipe.go halfClose），隐藏该方法会让它退化为整条关闭。
+// 底层不支持半关闭时整条关闭，与 GOST 的回退行为一致。
+func (c *trackedConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return c.Close()
+}
+
+// CloseRead 透传半关闭；底层不支持时什么也不做。
+func (c *trackedConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return nil
+}
+
 func (c *trackedConn) SyscallConn() (syscall.RawConn, error) {
 	if sc, ok := c.Conn.(syscall.Conn); ok {
 		return sc.SyscallConn()
