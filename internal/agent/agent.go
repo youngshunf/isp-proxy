@@ -21,6 +21,10 @@ type SubState struct {
 	ExpiresAt     time.Time
 	Enabled       bool   // 管理意图、账号、生命周期等汇总后的结果
 	UsedFloor     uint64 // 控制面最后确认的累计已用量；节点取较大值
+
+	// 套餐限制（A-W3），0 表示不限。
+	MaxConns     int   // 同时在线的已认证连接数上限；超出的新连接在认证阶段被拒绝
+	BandwidthBps int64 // 带宽上限（字节/秒），上行与下行各自一份、各自等于该值，由订阅全部连接共享
 }
 
 // sub 是节点内的订阅运行态。对象一经创建不再替换，连接会持有它。
@@ -31,6 +35,10 @@ type sub struct {
 	used      atomic.Uint64
 	expiresAt atomic.Int64 // UTC 纳秒
 	enabled   atomic.Bool
+
+	maxConns atomic.Int64 // 0 表示不限
+	active   atomic.Int64 // 已认证且未关闭的连接数
+	up, down bucket       // 上行（读客户端）与下行（写客户端）带宽
 
 	// 以下字段受 Agent.mu 保护。
 	timer  *time.Timer
@@ -50,14 +58,15 @@ type cred struct {
 type Agent struct {
 	mu       sync.Mutex
 	subs     map[string]*sub
-	users    map[string]*cred                     // 连接用户名 -> 凭据
-	services map[string]string                    // GOST service 名 -> 订阅 ID
-	conns    map[string]map[*trackedConn]struct{} // GOST service 名 -> 存量连接
+	users    map[string]*cred    // 连接用户名 -> 凭据
+	services map[string]string   // GOST service 名 -> 订阅 ID
+	conns    map[string]*connSet // GOST service 名 -> 存量连接
 
 	store      Store
 	flushEvery time.Duration
 	persistOK  atomic.Bool
 	now        func() time.Time
+	egress     atomic.Pointer[EgressPolicy]
 
 	stopOnce sync.Once
 	stop     chan struct{}
@@ -71,6 +80,7 @@ type Options struct {
 	Store      Store         // 为空时不持久化（仅测试）
 	FlushEvery time.Duration // 持久化间隔，默认 1 秒（D-17）
 	Now        func() time.Time
+	Egress     EgressPolicy // 出站策略；零值为默认封禁（A-W4）
 }
 
 // New 创建 Agent，并从持久化存储恢复累计用量。
@@ -79,7 +89,7 @@ func New(opts Options) (*Agent, error) {
 		subs:       map[string]*sub{},
 		users:      map[string]*cred{},
 		services:   map[string]string{},
-		conns:      map[string]map[*trackedConn]struct{}{},
+		conns:      map[string]*connSet{},
 		store:      opts.Store,
 		flushEvery: opts.FlushEvery,
 		now:        opts.Now,
@@ -93,6 +103,7 @@ func New(opts Options) (*Agent, error) {
 		a.now = time.Now
 	}
 	a.persistOK.Store(true)
+	a.SetEgressPolicy(opts.Egress)
 
 	if a.store != nil {
 		used, err := a.store.Load()
@@ -154,6 +165,9 @@ func (a *Agent) Upsert(st SubState) bool {
 	s.expiresAt.Store(st.ExpiresAt.UnixNano())
 	s.enabled.Store(st.Enabled)
 	raiseTo(&s.used, st.UsedFloor)
+	s.maxConns.Store(int64(max(st.MaxConns, 0)))
+	s.up.set(st.BandwidthBps)
+	s.down.set(st.BandwidthBps)
 
 	if s.timer != nil {
 		s.timer.Stop()
@@ -223,14 +237,14 @@ func (a *Agent) kick(s *sub) {
 		if id != s.id {
 			continue
 		}
-		for c := range a.conns[svc] {
+		for c := range a.connsLocked(svc) {
 			victims = append(victims, c)
 		}
 	}
 	a.mu.Unlock()
 	a.kicks.Add(1)
 	for _, c := range victims {
-		c.Conn.Close()
+		c.abort()
 	}
 }
 
@@ -239,13 +253,13 @@ func (a *Agent) kickServices(names []string) {
 	a.mu.Lock()
 	var victims []*trackedConn
 	for _, svc := range names {
-		for c := range a.conns[svc] {
+		for c := range a.connsLocked(svc) {
 			victims = append(victims, c)
 		}
 	}
 	a.mu.Unlock()
 	for _, c := range victims {
-		c.Conn.Close()
+		c.abort()
 	}
 }
 
@@ -256,7 +270,7 @@ func (a *Agent) ConnCount(id string) int {
 	n := 0
 	for svc, sid := range a.services {
 		if sid == id {
-			n += len(a.conns[svc])
+			n += len(a.connsLocked(svc))
 		}
 	}
 	return n

@@ -75,25 +75,11 @@ func (globalAuther) Authenticate(ctx context.Context, user, password string, opt
 	if c == nil || c.sub == nil || c.sub.id != id {
 		return "", false
 	}
-	c.markAuthed()
+	// 并发连接已满时同样以认证失败明确拒绝（HTTP 407、SOCKS5 认证失败），不挂起。
+	if !c.markAuthed() {
+		return "", false
+	}
 	return id, true
-}
-
-// connBySrc 按服务名和客户端地址在连接表中查找连接。
-// SOCKS5 处理器以 context.Background() 调用认证器，只附带源地址（x v0.28.1 socks/v5/selector.go）。
-func (a *Agent) connBySrc(service string, src net.Addr) *trackedConn {
-	if src == nil {
-		return nil
-	}
-	key := src.String()
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for c := range a.conns[service] {
-		if c.RemoteAddr().String() == key {
-			return c
-		}
-	}
-	return nil
 }
 
 // ---- 连接表 ----
@@ -124,31 +110,9 @@ func (l *trackingListener) Accept() (net.Conn, error) {
 		c.Close()
 		return nil, errors.New("agent: not installed")
 	}
-	tc := &trackedConn{Conn: c, a: a, service: l.service}
+	tc := newTrackedConn(c, a, l.service)
 	a.track(tc) // 同时根据服务名确定所属订阅
 	return tc, nil
-}
-
-func (a *Agent) track(c *trackedConn) {
-	a.mu.Lock()
-	if id, ok := a.services[c.service]; ok {
-		c.sub = a.subs[id]
-	}
-	m := a.conns[c.service]
-	if m == nil {
-		m = map[*trackedConn]struct{}{}
-		a.conns[c.service] = m
-	}
-	m[c] = struct{}{}
-	a.mu.Unlock()
-}
-
-func (a *Agent) untrack(c *trackedConn) {
-	a.mu.Lock()
-	if m := a.conns[c.service]; m != nil {
-		delete(m, c)
-	}
-	a.mu.Unlock()
 }
 
 // ---- 出口：失败即拒绝的链 ----
@@ -165,7 +129,11 @@ type Exit struct {
 // exitChain 包装真实链。GOST 在链缺失或选不出节点时会退化为直连
 // （x v0.28.1 chain/router.go 与 chain/route.go 的 DefaultRoute），
 // 这里在这两种情况下都返回一个必然失败的路由。
+//
+// 路由入口同时执行出站策略（A-W4）：被封目标同样得到必然失败的路由，
+// 上游收不到连接，也不会退化为直连。拒绝不踢连接、不影响同订阅的其它连接。
 type exitChain struct {
+	a     *Agent // 提供出站策略；为空时使用默认策略
 	inner atomic.Pointer[chainHolder]
 }
 
@@ -178,6 +146,10 @@ func (e *exitChain) Route(ctx context.Context, network, address string, opts ...
 	h := e.inner.Load()
 	if h == nil {
 		return failRoute{}
+	}
+	// address 是路由器解析后的地址；节点未配置解析器时仍是主机名，由策略自行解析。
+	if err := e.a.egressPolicy().Check(ctx, network, address); err != nil {
+		return failRoute{err: err}
 	}
 	r := h.c.Route(ctx, network, address, opts...)
 	if r == nil || len(r.Nodes()) == 0 {
@@ -193,13 +165,21 @@ func (e *exitChain) current() Exit {
 	return Exit{}
 }
 
-type failRoute struct{}
+// failRoute 是必然失败的路由；err 为空时为 ErrNoExit。
+type failRoute struct{ err error }
 
-func (failRoute) Dial(context.Context, string, string, ...chain.DialOption) (net.Conn, error) {
-	return nil, ErrNoExit
+func (f failRoute) error() error {
+	if f.err != nil {
+		return f.err
+	}
+	return ErrNoExit
 }
-func (failRoute) Bind(context.Context, string, string, ...chain.BindOption) (net.Listener, error) {
-	return nil, ErrNoExit
+
+func (f failRoute) Dial(context.Context, string, string, ...chain.DialOption) (net.Conn, error) {
+	return nil, f.error()
+}
+func (f failRoute) Bind(context.Context, string, string, ...chain.BindOption) (net.Listener, error) {
+	return nil, f.error()
 }
 func (failRoute) Nodes() []*chain.Node { return nil }
 
@@ -274,7 +254,7 @@ func (a *Agent) ApplyAccess(subID string, acc Access, exit *Exit) error {
 	if err != nil {
 		return err
 	}
-	ec := &exitChain{}
+	ec := &exitChain{a: a}
 	ec.inner.Store(&chainHolder{c: inner, exit: e})
 	if err := registry.ChainRegistry().Register(chainName, ec); err != nil {
 		return err
