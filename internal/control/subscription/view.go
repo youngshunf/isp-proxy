@@ -651,3 +651,30 @@ func (s *Service) UserSubscriptions(ctx context.Context, userID string) (any, er
 	}
 	return p.Items, nil
 }
+
+// BlockerCounts 统计未删除订阅：总数、可用数与各阻断原因的订阅数（概览用，与列表筛选同一来源）。
+func (s *Service) BlockerCounts(ctx context.Context) (total, usable int, counts map[string]int, err error) {
+	now := s.env.Now()
+	counts = map[string]int{}
+	inner := `SELECT ` + blockersSQL + ` AS blockers FROM subscriptions s JOIN users u ON u.id = s.user_id LEFT JOIN nodes n ON n.id = s.node_id
+	          WHERE s.lifecycle <> 'deleted'`
+	if err = s.env.Pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE cardinality(blockers) = 0) FROM (`+inner+`) v`, now).
+		Scan(&total, &usable); err != nil {
+		return
+	}
+	rows, err := s.env.Pool.Query(ctx, `SELECT b, count(*) FROM (`+inner+`) v, unnest(v.blockers) b GROUP BY b`, now)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var b string
+		var n int
+		if err = rows.Scan(&b, &n); err != nil {
+			return
+		}
+		counts[b] = n
+	}
+	err = rows.Err()
+	return
+}
