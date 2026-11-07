@@ -392,6 +392,7 @@ paths:
         服务端校验套餐可售、价格版本（传了 planVersionId/packVersionId 而已变化时返回 409）、用户状态与库存。
         新购未付款预留库存 24 小时，每用户同时最多 3 个未付款新购（R-16.4），超出返回 409；无货返回 409。
         续购类订单只能针对本人订阅。一次订单一个订阅（D-13），新购 quantity 只能为 1。
+        当前规则版本未配置收款说明时返回 412（docs/06 §8.1）。
       security: [{userSession: []}]
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
