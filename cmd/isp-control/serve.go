@@ -132,7 +132,7 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer, hooks *serve
 	worker.Init()
 	plat, err := api.Assemble(api.Deps{Pool: pool, Box: box, Cookies: session.Cookies{Secure: cfg.SecureCookies},
 		Mail: worker, Issuer: cfg.TOTPIssuer, Logger: log,
-		Core: kernel.Config{EchoURL: cfg.Core.EchoURL, Geo: kernel.StaticGeo(cfg.Core.ExitCountries)}})
+		Core: kernel.Config{EchoURL: cfg.Core.EchoURL, Geo: kernel.StaticGeo(cfg.Core.ExitCountries), Brand: cfg.Mail.Brand}})
 	if err != nil {
 		return err
 	}
