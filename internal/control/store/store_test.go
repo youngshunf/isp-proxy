@@ -8,6 +8,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/go-gost/gost/internal/control/kernel"
 	"github.com/go-gost/gost/internal/control/store"
 	"github.com/go-gost/gost/internal/control/store/pgtest"
 	"github.com/go-gost/gost/migrations"
@@ -445,4 +446,44 @@ func mustAdmin(t *testing.T, f *fixture) string {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// 内置规则 R-2026-11-08 是兜底版本：管理员发布的规则（effective_from 不早于发布时刻）无论何时发布，都必须在其后一直生效。
+// 曾因内置规则 effective_from 固定为 2026-11-08T00:00Z，早于该时刻发布的规则会在该时刻被收款说明为空的内置规则覆盖（docs/06 §8.1）。
+func TestSeedRulesNeverOverridePublished(t *testing.T) {
+	c := ctx(t)
+	pool := pgtest.Open(t, pgtest.NewDatabase(t))
+	if _, err := store.Migrate(c, pool); err != nil {
+		t.Fatal(err)
+	}
+	// 2026-11-07 发布（早于内置规则原定的生效时刻）。
+	if _, err := pool.Exec(c, `INSERT INTO rules (version, effective_from, period_days, retention_days, port_cooldown_days,
+	        resource_cooldown_days, access_changes_per_window, access_change_window_hours, free_exit_changes_per_window,
+	        exit_change_window_days, unpaid_hold_hours, max_unpaid_new_orders, month_options, snapshot_lines,
+	        payment_payee, payment_bank, payment_account)
+	        SELECT 'R-2026-11-07.1', '2026-11-07T12:00:00Z', period_days, retention_days, port_cooldown_days, resource_cooldown_days,
+	          access_changes_per_window, access_change_window_hours, free_exit_changes_per_window, exit_change_window_days,
+	          unpaid_hold_hours, max_unpaid_new_orders, month_options, snapshot_lines, '收款方', '银行', '账号'
+	        FROM rules WHERE version = 'R-2026-11-08'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []string{"2026-11-07T12:00:00Z", "2026-11-08T00:00:01Z", "2027-06-01T00:00:00Z"} {
+		now, _ := time.Parse(time.RFC3339, at)
+		r, err := kernel.CurrentRules(c, pool, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Version != "R-2026-11-07.1" || !r.PaymentConfigured() {
+			t.Fatalf("%s 生效的规则应为管理员发布的 R-2026-11-07.1，得到 %s", at, r.Version)
+		}
+	}
+	// 没有发布任何规则时，内置规则在任何时刻都生效（不会出现“尚未发布生效的规则版本”）。
+	pool2 := pgtest.Open(t, pgtest.NewDatabase(t))
+	if _, err := store.Migrate(c, pool2); err != nil {
+		t.Fatal(err)
+	}
+	r, err := kernel.CurrentRules(c, pool2, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil || r.Version != "R-2026-11-08" {
+		t.Fatalf("只有内置规则时应返回它：%v %v", r, err)
+	}
 }

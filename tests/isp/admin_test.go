@@ -80,13 +80,6 @@ func (a *Admin) PublishRules(r *RulesInput) {
 		r.Version = fmt.Sprintf("R-2026-11-08.%d", time.Now().UnixNano()%1_000_000_000)
 	}
 	a.Must("POST", "/rules", r, nil)
-	// 迁移内置规则 R-2026-11-08 的生效时间固定为 2026-11-08T00:00Z（收款说明为空）。在此之前发布的规则会在该时刻
-	// 被内置规则覆盖（按 effective_from 取最新），拨时钟的场景就会突然“暂未开放购买”。这里在内置规则之后再发布一份同内容的规则。
-	if seed := time.Date(2026, 11, 8, 0, 0, 1, 0, time.UTC); r.EffectiveFrom.Before(seed) {
-		again := *r
-		again.Version, again.EffectiveFrom = r.Version+"1", seed
-		a.Must("POST", "/rules", &again, nil)
-	}
 }
 
 // CreateUpstream 录入上游。
