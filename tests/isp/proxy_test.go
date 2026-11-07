@@ -345,3 +345,54 @@ func WaitClosed(p *PConn, max time.Duration) (time.Duration, bool) {
 
 // Refused 报告 addr 是否不再监听。
 func Refused(addr string) bool { return agenttest.Refused(addr) }
+
+// Stream 经入口下载 n 字节，边读边把正文字节累加到 ctr（统计崩溃、耗尽瞬间客户端已收到多少）。
+func Stream(m Mode, c Creds, target string, n int64, ctr *atomic.Int64, timeout time.Duration) error {
+	var p *PConn
+	var err error
+	if m == Forward {
+		conn, cc, derr := dialRaw(m, c)
+		if derr != nil {
+			return derr
+		}
+		p = &PConn{Conn: conn, Raw: cc, br: bufio.NewReader(conn), mode: m, creds: c, target: target}
+	} else if p, err = Open(m, c, target); err != nil {
+		return err
+	}
+	defer p.Close()
+	p.Conn.SetDeadline(time.Now().Add(timeout))
+	path := "/bytes?n=" + strconv.FormatInt(n, 10)
+	reqLine := "GET " + path + " HTTP/1.1"
+	extra := ""
+	if m == Forward {
+		reqLine = "GET http://" + target + path + " HTTP/1.1"
+		extra = "Proxy-Authorization: " + basic(c) + "\r\n"
+	}
+	if _, err := io.WriteString(p.Conn, reqLine+"\r\nHost: "+target+"\r\n"+extra+"Connection: close\r\n\r\n"); err != nil {
+		return err
+	}
+	resp, err := http.ReadResponse(p.br, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return &ErrRejected{"stream: " + resp.Status}
+	}
+	buf := make([]byte, 32*1024)
+	var got int64
+	for {
+		k, err := resp.Body.Read(buf)
+		got += int64(k)
+		ctr.Add(int64(k))
+		if err == io.EOF {
+			if got != n {
+				return fmt.Errorf("stream: 收到 %d / %d", got, n)
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}

@@ -87,6 +87,8 @@ func TestA23_RegisterVerifyLoginNoEnumeration(t *testing.T) {
 			map[string]string{"email": unknown, "password": "wrong-password"}}},
 	}
 	for _, c := range cases {
+		// 同一邮箱 60 秒只发一封（对未注册邮箱同样计数）：每组比较前拨过限流窗口，两边起点相同。
+		e.ShiftClock(61 * time.Second)
 		s1, m1 := probe("POST", c.path, c.body.known)
 		s2, m2 := probe("POST", c.path, c.body.unknown)
 		if s1 != s2 || m1 != m2 {
