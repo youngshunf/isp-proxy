@@ -1,13 +1,15 @@
-// Package agent 是节点代理的计量原型，对应 docs/04-计量与执行方案.md。
+// Package agent 是节点代理的数据面执行层，对应 docs/04-计量与执行方案.md。
 //
 // 它与 GOST 内核同进程运行，按订阅（subscription）在认证成功后授权字节、
 // 维护连接表并在耗尽、到期、暂停或撤销接入时主动关闭全部连接。
-// 本包目前只用于原型验证（S-1～S-10），不是生产实现。
+// 与控制面的对接（期望状态对账、上报、探测、本地状态恢复）在子包 node 中，
+// 由 gost -agent-config 启动（M3）。
 package agent
 
 import (
 	"crypto/subtle"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -162,7 +164,7 @@ func (a *Agent) Upsert(st SubState) bool {
 	}
 	s.version.Store(st.Version)
 	s.entitled.Store(st.EntitledTotal)
-	s.expiresAt.Store(st.ExpiresAt.UnixNano())
+	s.expiresAt.Store(unixNano(st.ExpiresAt))
 	s.enabled.Store(st.Enabled)
 	raiseTo(&s.used, st.UsedFloor)
 	s.maxConns.Store(int64(max(st.MaxConns, 0)))
@@ -182,6 +184,46 @@ func (a *Agent) Upsert(st SubState) bool {
 		a.kick(s)
 	}
 	return true
+}
+
+// Ensure 确保订阅存在；新建的订阅版本为 0、额度为 0、未起算，不可用。
+// 节点运行时在应用首个版本前调用，使接入可以先于订阅状态建立（失败时订阅保持不可用）。
+func (a *Agent) Ensure(id string) {
+	a.getOrCreate(id)
+}
+
+// Forget 从节点上删除一个已撤销接入的订阅：停止到期计时器，下一次落盘起不再保存其用量。
+// 节点运行时只在其最终用量已被控制面确认后调用。订阅仍有接入时返回错误。
+func (a *Agent) Forget(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := a.subs[id]
+	if s == nil {
+		return nil
+	}
+	if s.access != nil {
+		return errors.New("agent: forget subscription with live access")
+	}
+	if s.timer != nil {
+		s.timer.Stop()
+		s.timer = nil
+	}
+	delete(a.subs, id)
+	return nil
+}
+
+// unixNano 把到期时间换成 UTC 纳秒，并把 int64 表示不了的时间钳到边界：
+// time.Time.UnixNano 对 1678 年之前（含零值）与 2262 年之后的结果未定义，零值可能溢出成正数而被当作“未到期”。
+// 零值与 1970 年之前一律视为已到期（期望状态中 expires_at 零值表示未起算，不可用）。
+func unixNano(t time.Time) int64 {
+	switch {
+	case t.IsZero() || t.Before(time.Unix(0, 0)):
+		return 0
+	case t.After(time.Unix(0, math.MaxInt64)):
+		return math.MaxInt64
+	default:
+		return t.UnixNano()
+	}
 }
 
 // raiseTo 把 v 提升到至少 floor，只增不减。
