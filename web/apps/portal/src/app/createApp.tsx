@@ -6,7 +6,7 @@ import { createBrowserRouter, createMemoryRouter } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
 import { ApiError, type PortalApi } from '@isp/api-client'
 import { theme } from '@isp/ui'
-import { configureApi, setQueryUser } from './api'
+import { configureApi, qk, setQueryUser } from './api'
 import { routes } from './router'
 
 export interface AppOptions {
@@ -34,6 +34,11 @@ export function createApp({ api, now, initialPath }: AppOptions = {}) {
     redirecting = true
     let to = '/verify-email'
     if (e.code === 'unauthorized') {
+      // 本标签页从未建立过会话（首次访问）：交给 Shell 的守卫普通跳转，不提示“会话已过期”。
+      if (!queryClient.getQueryData(qk.session)) {
+        redirecting = false
+        return
+      }
       queryClient.clear()
       setQueryUser(null)
       to = `/login?next=${encodeURIComponent(loc.pathname + loc.search)}&expired=1`

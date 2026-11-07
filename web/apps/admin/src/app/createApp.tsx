@@ -6,7 +6,7 @@ import { createBrowserRouter, createMemoryRouter } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
 import { ApiError, type AdminApi } from '@isp/api-client/admin'
 import { theme } from '@isp/ui'
-import { ApiContext, ServerNowContext, isUnauthorized } from './api'
+import { ApiContext, ServerNowContext, isUnauthorized, qk } from './api'
 import { routes } from './routes'
 
 export interface AppOptions {
@@ -25,6 +25,9 @@ export function createApp({ api, now, initialPath }: AppOptions) {
     if (!isUnauthorized(e) || redirecting) return
     const loc = router.state.location
     if (loc.pathname === '/login') return
+    // 本标签页从未建立过会话（首次访问）：交给 Shell 的守卫普通跳转，不提示“会话已过期”。
+    // 两条路径谁先触发取决于请求时序，这里必须按“是否有过会话”区分，而不是按先后。
+    if (!queryClient.getQueryData(qk.me)) return
     redirecting = true
     queryClient.clear()
     const from = loc.pathname + loc.search
