@@ -37,11 +37,11 @@ func TestExitChainFailsClosed(t *testing.T) {
 		cases[name] = ec
 	}
 	for name, ec := range cases {
-		r := ec.Route(context.Background(), "tcp", "example.com:80")
+		r := ec.Route(context.Background(), "tcp", "198.51.100.1:80")
 		if r == nil || len(r.Nodes()) != 0 {
 			t.Fatalf("%s: got %T", name, r)
 		}
-		if _, err := r.Dial(context.Background(), "tcp", "example.com:80"); !errors.Is(err, ErrNoExit) {
+		if _, err := r.Dial(context.Background(), "tcp", "198.51.100.1:80"); !errors.Is(err, ErrNoExit) {
 			t.Fatalf("%s: dial err %v", name, err)
 		}
 	}
@@ -98,5 +98,50 @@ func TestUpsertVersionAndMonotonicUsage(t *testing.T) {
 	}
 	if a.lookup("s").entitled.Load() != 100 {
 		t.Fatal("stale entitlement applied")
+	}
+}
+
+// 计量连接必须保留半关闭能力：GOST 的转发在一侧结束时对另一侧 CloseWrite，
+// 包装若隐藏该方法，GOST 会退化为整条关闭（x v0.28.1 internal/net/pipe.go halfClose）。
+func TestTrackedConnHalfClose(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	peer, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	raw, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newBareAgent(t)
+	c := newTrackedConn(raw, a, "svc")
+	defer c.Close()
+
+	cw, ok := any(c).(interface{ CloseWrite() error })
+	if !ok {
+		t.Fatal("trackedConn hides CloseWrite")
+	}
+	if _, ok := any(c).(interface{ CloseRead() error }); !ok {
+		t.Fatal("trackedConn hides CloseRead")
+	}
+	if err := cw.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	peer.SetDeadline(time.Now().Add(time.Second))
+	if n, err := peer.Read(make([]byte, 1)); n != 0 || err == nil {
+		t.Fatalf("peer did not see EOF: %d %v", n, err)
+	}
+	// 半关闭后反方向仍可用。
+	if _, err := peer.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	if n, err := c.Read(make([]byte, 1)); n != 1 || err != nil {
+		t.Fatalf("read after half-close: %d %v", n, err)
 	}
 }

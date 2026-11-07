@@ -1,13 +1,15 @@
-// Package agent 是节点代理的计量原型，对应 docs/04-计量与执行方案.md。
+// Package agent 是节点代理的数据面执行层，对应 docs/04-计量与执行方案.md。
 //
 // 它与 GOST 内核同进程运行，按订阅（subscription）在认证成功后授权字节、
 // 维护连接表并在耗尽、到期、暂停或撤销接入时主动关闭全部连接。
-// 本包目前只用于原型验证（S-1～S-10），不是生产实现。
+// 与控制面的对接（期望状态对账、上报、探测、本地状态恢复）在子包 node 中，
+// 由 gost -agent-config 启动（M3）。
 package agent
 
 import (
 	"crypto/subtle"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +23,10 @@ type SubState struct {
 	ExpiresAt     time.Time
 	Enabled       bool   // 管理意图、账号、生命周期等汇总后的结果
 	UsedFloor     uint64 // 控制面最后确认的累计已用量；节点取较大值
+
+	// 套餐限制（A-W3），0 表示不限。
+	MaxConns     int   // 同时在线的已认证连接数上限；超出的新连接在认证阶段被拒绝
+	BandwidthBps int64 // 带宽上限（字节/秒），上行与下行各自一份、各自等于该值，由订阅全部连接共享
 }
 
 // sub 是节点内的订阅运行态。对象一经创建不再替换，连接会持有它。
@@ -31,6 +37,10 @@ type sub struct {
 	used      atomic.Uint64
 	expiresAt atomic.Int64 // UTC 纳秒
 	enabled   atomic.Bool
+
+	maxConns atomic.Int64 // 0 表示不限
+	active   atomic.Int64 // 已认证且未关闭的连接数
+	up, down bucket       // 上行（读客户端）与下行（写客户端）带宽
 
 	// 以下字段受 Agent.mu 保护。
 	timer  *time.Timer
@@ -50,14 +60,15 @@ type cred struct {
 type Agent struct {
 	mu       sync.Mutex
 	subs     map[string]*sub
-	users    map[string]*cred                     // 连接用户名 -> 凭据
-	services map[string]string                    // GOST service 名 -> 订阅 ID
-	conns    map[string]map[*trackedConn]struct{} // GOST service 名 -> 存量连接
+	users    map[string]*cred    // 连接用户名 -> 凭据
+	services map[string]string   // GOST service 名 -> 订阅 ID
+	conns    map[string]*connSet // GOST service 名 -> 存量连接
 
 	store      Store
 	flushEvery time.Duration
 	persistOK  atomic.Bool
 	now        func() time.Time
+	egress     atomic.Pointer[EgressPolicy]
 
 	stopOnce sync.Once
 	stop     chan struct{}
@@ -71,6 +82,7 @@ type Options struct {
 	Store      Store         // 为空时不持久化（仅测试）
 	FlushEvery time.Duration // 持久化间隔，默认 1 秒（D-17）
 	Now        func() time.Time
+	Egress     EgressPolicy // 出站策略；零值为默认封禁（A-W4）
 }
 
 // New 创建 Agent，并从持久化存储恢复累计用量。
@@ -79,7 +91,7 @@ func New(opts Options) (*Agent, error) {
 		subs:       map[string]*sub{},
 		users:      map[string]*cred{},
 		services:   map[string]string{},
-		conns:      map[string]map[*trackedConn]struct{}{},
+		conns:      map[string]*connSet{},
 		store:      opts.Store,
 		flushEvery: opts.FlushEvery,
 		now:        opts.Now,
@@ -93,6 +105,7 @@ func New(opts Options) (*Agent, error) {
 		a.now = time.Now
 	}
 	a.persistOK.Store(true)
+	a.SetEgressPolicy(opts.Egress)
 
 	if a.store != nil {
 		used, err := a.store.Load()
@@ -151,9 +164,12 @@ func (a *Agent) Upsert(st SubState) bool {
 	}
 	s.version.Store(st.Version)
 	s.entitled.Store(st.EntitledTotal)
-	s.expiresAt.Store(st.ExpiresAt.UnixNano())
+	s.expiresAt.Store(unixNano(st.ExpiresAt))
 	s.enabled.Store(st.Enabled)
 	raiseTo(&s.used, st.UsedFloor)
+	s.maxConns.Store(int64(max(st.MaxConns, 0)))
+	s.up.set(st.BandwidthBps)
+	s.down.set(st.BandwidthBps)
 
 	if s.timer != nil {
 		s.timer.Stop()
@@ -168,6 +184,46 @@ func (a *Agent) Upsert(st SubState) bool {
 		a.kick(s)
 	}
 	return true
+}
+
+// Ensure 确保订阅存在；新建的订阅版本为 0、额度为 0、未起算，不可用。
+// 节点运行时在应用首个版本前调用，使接入可以先于订阅状态建立（失败时订阅保持不可用）。
+func (a *Agent) Ensure(id string) {
+	a.getOrCreate(id)
+}
+
+// Forget 从节点上删除一个已撤销接入的订阅：停止到期计时器，下一次落盘起不再保存其用量。
+// 节点运行时只在其最终用量已被控制面确认后调用。订阅仍有接入时返回错误。
+func (a *Agent) Forget(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := a.subs[id]
+	if s == nil {
+		return nil
+	}
+	if s.access != nil {
+		return errors.New("agent: forget subscription with live access")
+	}
+	if s.timer != nil {
+		s.timer.Stop()
+		s.timer = nil
+	}
+	delete(a.subs, id)
+	return nil
+}
+
+// unixNano 把到期时间换成 UTC 纳秒，并把 int64 表示不了的时间钳到边界：
+// time.Time.UnixNano 对 1678 年之前（含零值）与 2262 年之后的结果未定义，零值可能溢出成正数而被当作“未到期”。
+// 零值与 1970 年之前一律视为已到期（期望状态中 expires_at 零值表示未起算，不可用）。
+func unixNano(t time.Time) int64 {
+	switch {
+	case t.IsZero() || t.Before(time.Unix(0, 0)):
+		return 0
+	case t.After(time.Unix(0, math.MaxInt64)):
+		return math.MaxInt64
+	default:
+		return t.UnixNano()
+	}
 }
 
 // raiseTo 把 v 提升到至少 floor，只增不减。
@@ -223,14 +279,14 @@ func (a *Agent) kick(s *sub) {
 		if id != s.id {
 			continue
 		}
-		for c := range a.conns[svc] {
+		for c := range a.connsLocked(svc) {
 			victims = append(victims, c)
 		}
 	}
 	a.mu.Unlock()
 	a.kicks.Add(1)
 	for _, c := range victims {
-		c.Conn.Close()
+		c.abort()
 	}
 }
 
@@ -239,13 +295,13 @@ func (a *Agent) kickServices(names []string) {
 	a.mu.Lock()
 	var victims []*trackedConn
 	for _, svc := range names {
-		for c := range a.conns[svc] {
+		for c := range a.connsLocked(svc) {
 			victims = append(victims, c)
 		}
 	}
 	a.mu.Unlock()
 	for _, c := range victims {
-		c.Conn.Close()
+		c.abort()
 	}
 }
 
@@ -256,7 +312,7 @@ func (a *Agent) ConnCount(id string) int {
 	n := 0
 	for svc, sid := range a.services {
 		if sid == id {
-			n += len(a.conns[svc])
+			n += len(a.connsLocked(svc))
 		}
 	}
 	return n

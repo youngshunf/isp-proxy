@@ -24,6 +24,8 @@ import (
 	xplugin "github.com/go-gost/x/plugin"
 	"github.com/go-gost/x/registry"
 	"github.com/judwhite/go-svc"
+
+	"github.com/go-gost/gost/internal/agent/node"
 )
 
 type program struct {
@@ -31,12 +33,20 @@ type program struct {
 	srvMetrics   service.Service
 	srvProfiling *http.Server
 
+	// agent 是 ISP 节点 agent 运行时（-agent-config）；为空表示上游 GOST 模式。
+	agent *node.Runtime
+
 	cancel context.CancelFunc
 }
 
 func (p *program) Init(env svc.Environment) error {
+	files := cfgFiles
+	if agentConfig != "" && len(files) == 0 && len(services) == 0 && len(nodes) == 0 {
+		// agent 模式下接入服务全部来自控制面：没有 -C/-L/-F 时不去查找默认的 gost.yml。
+		files = []string{"{}"}
+	}
 	parser.Init(parser.Args{
-		CfgFiles:    cfgFiles,
+		CfgFiles:    files,
 		Services:    services,
 		Nodes:       nodes,
 		Debug:       debug,
@@ -49,9 +59,22 @@ func (p *program) Init(env svc.Environment) error {
 }
 
 func (p *program) Start() error {
+	var agentCfg *node.Config
+	if agentConfig != "" {
+		var err error
+		if agentCfg, err = node.LoadConfig(agentConfig); err != nil {
+			return err
+		}
+	}
+
 	cfg, err := parser.Parse()
 	if err != nil {
 		return err
+	}
+	if agentCfg != nil {
+		if err := checkAgentMode(cfg); err != nil {
+			return err
+		}
 	}
 
 	if outputFormat != "" {
@@ -77,10 +100,35 @@ func (p *program) Start() error {
 		return err
 	}
 
+	// agent 在 GOST 配置加载之后启动：loader.Load 会重设默认 TLS 配置，agent 随后把它换成 HTTPS 入口证书。
+	if agentCfg != nil {
+		rt, err := node.Start(agentCfg, node.Options{AgentVersion: getVersion()})
+		if err != nil {
+			return err
+		}
+		p.agent = rt
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	go p.reload(ctx)
 
+	return nil
+}
+
+// errAgentReload 表示 agent 模式不支持重载 GOST 配置。
+var errAgentReload = errors.New("agent 模式不支持重载 GOST 配置（SIGHUP、-R）：重载会清空认证器与出口链注册表，" +
+	"使 isp-auth 缺失时放行、出口链缺失时直连；改配置请重启进程")
+
+// checkAgentMode 检查 agent 模式的约束（docs/06 §2）：不开放 GOST 原生 API（-api、配置文件 api 段、GOST_API），
+// 不允许定时重载。GOST 原生 API 能增删服务、链与认证器，绕过 agent 的计量与出口保护。
+func checkAgentMode(cfg *config.Config) error {
+	if cfg.API != nil {
+		return errors.New("agent 模式不开放 GOST 原生 API：去掉 -api、配置文件中的 api 段或 GOST_API 环境变量")
+	}
+	if reload > 0 {
+		return errAgentReload
+	}
 	return nil
 }
 
@@ -174,6 +222,13 @@ func (p *program) Stop() error {
 		p.cancel()
 	}
 
+	if p.agent != nil {
+		if err := p.agent.Close(); err != nil {
+			logger.Default().Errorf("agent shutdown: %v", err)
+		}
+		logger.Default().Debug("agent shutdown")
+	}
+
 	for name, srv := range registry.ServiceRegistry().GetAll() {
 		srv.Close()
 		logger.Default().Debugf("service %s shutdown", name)
@@ -231,6 +286,9 @@ func (p *program) reload(ctx context.Context) {
 }
 
 func (p *program) reloadConfig() error {
+	if p.agent != nil {
+		return errAgentReload
+	}
 	cfg, err := parser.Parse()
 	if err != nil {
 		return err
