@@ -2,7 +2,7 @@ import { CheckOutlined } from '@ant-design/icons'
 import { Alert, Button } from 'antd'
 import type { Catalog, Money } from '@isp/api-client'
 import { fmtMoney } from '../lib/format'
-import { Plate } from './Plate'
+import { Plate } from '@isp/ui'
 
 export interface SummaryLine {
   label: string

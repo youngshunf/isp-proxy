@@ -4,10 +4,10 @@ import { Button, Result, Skeleton } from 'antd'
 import { Link } from 'react-router'
 import type { Order } from '@isp/api-client'
 import { api, errorText, qk } from '../app/api'
-import { Plate } from '../components/Plate'
+import { Plate } from '@isp/ui'
 import { fmtDate, fmtMoney } from '../lib/format'
 import { FULFILLMENT, PAYMENT } from '../lib/status'
-import { StateMark } from '../components/marks'
+import { StateMark } from '@isp/ui'
 
 export const KIND_LABEL: Record<Order['kind'], string> = { new: '新购', renew_time: '续时长', add_traffic: '买流量' }
 

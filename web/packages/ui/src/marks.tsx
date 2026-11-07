@@ -1,4 +1,4 @@
-import type { MarkShape, Tone } from '../lib/status'
+import type { MarkShape, Tone } from './tone'
 
 /** 固定格里的状态点：实心=成立，空心=不成立，半实心=处理中。形状本身携带含义，不只靠颜色。 */
 export function StateMark({ shape, size = 10 }: { shape: MarkShape; size?: number }) {
@@ -18,14 +18,14 @@ export function StateMark({ shape, size = 10 }: { shape: MarkShape; size?: numbe
 }
 
 // 国旗来自 flag-icons（MIT），4:3 比例；按需取 URL，只有出现在页面上的国旗才会下载。
-const FLAGS = import.meta.glob<string>('../../node_modules/flag-icons/flags/4x3/*.svg', {
+const FLAGS = import.meta.glob<string>('../node_modules/flag-icons/flags/4x3/*.svg', {
   query: '?url',
   import: 'default',
   eager: true,
 })
 
 function flagUrl(code: string): string | undefined {
-  return FLAGS[`../../node_modules/flag-icons/flags/4x3/${code.toLowerCase()}.svg`]
+  return FLAGS[`../node_modules/flag-icons/flags/4x3/${code.toLowerCase()}.svg`]
 }
 
 /** 出口所在国家的国旗：卡面左上角的识别标记。未知国家显示国家代码。 */

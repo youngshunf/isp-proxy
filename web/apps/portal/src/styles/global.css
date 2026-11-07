@@ -1,133 +1,8 @@
 /* 用户前台视觉：SIM 卡与套餐余量（.impeccable/surfaces/web-apps-portal.md）。
-   颜色、字体与切角都从这里的 token 取值，antd 主题在 app/theme.ts 中引用同一组数值。 */
+   token、切角容器、状态点、余量条、国旗、状态格等两端共用的样式在 @isp/ui/styles.css（main.tsx 先引入）；
+   这里只放前台自己的布局与组件。 */
 
-:root {
-  --tray: #eef1f0;
-  --tray-2: #e3e8e6;
-  --card: #ffffff;
-  --ink: #14231f;
-  --ink-2: #43524d;
-  --ink-3: #5c6b66;
-  --line: #d2dad7;
-  --line-2: #e4e9e7;
-
-  --teal: #00505c;
-  --teal-2: #006a7a;
-  --teal-tint: #e3eef0;
-  --teal-tint-2: #cde2e5;
-
-
-  --ok: #1d7a4f;
-  --warn: #8f5500;
-  --warn-fill: #c48219;
-  --warn-tint: #fbf1de;
-  --stop: #b3261e;
-  --stop-tint: #faeae8;
-
-  --chamfer: 22px;
-  --chamfer-sm: 14px;
-
-  --font-sans: 'Barlow', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei',
-    'Noto Sans CJK SC', 'Source Han Sans SC', system-ui, sans-serif;
-  --font-mono: 'Red Hat Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-
-  --shadow-card: drop-shadow(0 1px 1px rgb(20 35 31 / 0.07)) drop-shadow(0 6px 14px rgb(20 35 31 / 0.06));
-  --shadow-card-hover: drop-shadow(0 2px 2px rgb(20 35 31 / 0.08)) drop-shadow(0 10px 22px rgb(20 35 31 / 0.1));
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-
-  color-scheme: light;
-}
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-html {
-  scrollbar-color: #b3bfbb var(--tray);
-  scrollbar-width: thin;
-  -webkit-text-size-adjust: 100%;
-}
-
-body {
-  margin: 0;
-  background: var(--tray);
-  color: var(--ink);
-  font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.6;
-  font-feature-settings: 'tnum' 1;
-  -webkit-font-smoothing: antialiased;
-  caret-color: var(--teal);
-}
-
-::selection {
-  background: var(--teal-tint-2);
-  color: var(--ink);
-}
-
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-track {
-  background: var(--tray);
-}
-::-webkit-scrollbar-thumb {
-  background: #b3bfbb;
-  border: 2px solid var(--tray);
-  border-radius: 6px;
-}
-
-:focus-visible {
-  outline: 2px solid var(--teal);
-  outline-offset: 2px;
-}
-
-a {
-  color: var(--teal);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-}
-a:hover {
-  color: var(--teal-2);
-}
-
-h1,
-h2,
-h3 {
-  margin: 0;
-  font-weight: 600;
-  text-wrap: balance;
-  letter-spacing: 0;
-}
-
-.mono {
-  font-family: var(--font-mono);
-  font-feature-settings: normal;
-  letter-spacing: 0;
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-/* ---------- 外框：原型标识、顶栏、底部标签栏 ---------- */
-
-.proto-ribbon {
-  background: var(--ink);
-  color: #dfe7e4;
-  font-size: 12px;
-  line-height: 28px;
-  text-align: center;
-  padding: 0 16px;
-}
+/* ---------- 外框：顶栏、底部标签栏 ---------- */
 
 .topbar {
   position: sticky;
@@ -295,46 +170,6 @@ h3 {
   text-decoration: underline;
 }
 
-/* ---------- 切角容器 ---------- */
-
-.plate-wrap {
-  filter: var(--shadow-card);
-}
-.plate {
-  --ch: var(--chamfer);
-  position: relative;
-  background: var(--line);
-  padding: 1px;
-  clip-path: polygon(0 0, calc(100% - var(--ch)) 0, 100% var(--ch), 100% 100%, 0 100%);
-}
-.plate > .plate-body {
-  position: relative;
-  height: 100%;
-  background: var(--card);
-  clip-path: polygon(0 0, calc(100% - var(--ch) + 0.59px) 0, 100% calc(var(--ch) - 0.59px), 100% 100%, 0 100%);
-}
-.plate.sm {
-  --ch: var(--chamfer-sm);
-}
-.plate-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 18px 40px 0 22px;
-}
-.plate-head h2 {
-  font-size: 17px;
-  line-height: 1.4;
-}
-.plate-pad {
-  padding: 16px 22px 22px;
-}
-.plate-note {
-  color: var(--ink-3);
-  font-size: 13px;
-}
-
 /* ---------- SIM 卡 ---------- */
 
 .sim-grid {
@@ -387,39 +222,6 @@ h3 {
   color: var(--ink-3);
   font-size: 13px;
 }
-.state-cell {
-  position: absolute;
-  top: 0;
-  right: var(--ch);
-  height: 34px;
-  min-width: 92px;
-  padding: 0 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border-left: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  background: var(--card);
-}
-.state-cell.tone-ok {
-  color: var(--ok);
-}
-.state-cell.tone-warn {
-  color: var(--warn);
-}
-.state-cell.tone-stop {
-  color: var(--stop);
-  background: var(--stop-tint);
-}
-.state-cell.tone-wait {
-  color: var(--teal);
-  background: var(--teal-tint);
-}
-
 .sim-exit {
   margin-top: 18px;
 }
@@ -475,73 +277,6 @@ h3 {
   display: grid;
   gap: 14px;
   background: linear-gradient(var(--card), #fbfcfc);
-}
-
-/* ---------- 余量条 ---------- */
-
-.meter-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-.meter-label {
-  color: var(--ink-2);
-  font-size: 13px;
-}
-.meter-read {
-  font-size: 13px;
-  color: var(--ink-3);
-  white-space: nowrap;
-}
-.meter-read b {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ink);
-  margin-right: 2px;
-}
-.meter-track {
-  margin-top: 6px;
-  height: 6px;
-  background: var(--tray-2);
-  position: relative;
-  overflow: hidden;
-}
-.meter-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  background: var(--teal);
-  transform-origin: left center;
-}
-.meter.tone-warn .meter-fill {
-  background: var(--warn-fill);
-}
-.meter.tone-warn .meter-read b {
-  color: var(--warn);
-}
-.meter.tone-stop .meter-read b {
-  color: var(--stop);
-}
-.meter.tone-stop .meter-track {
-  background: repeating-linear-gradient(-45deg, var(--stop-tint) 0 4px, #f3d4d1 4px 6px);
-}
-.meter-note {
-  margin-top: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 13px;
-  line-height: 1.45;
-}
-.meter-note.tone-stop {
-  color: var(--stop);
-}
-.meter-note.tone-warn {
-  color: var(--warn);
-}
-.meter-note.tone-wait {
-  color: var(--teal);
 }
 
 /* ---------- 复制连接 ---------- */
@@ -606,13 +341,6 @@ h3 {
 .foot-hint {
   color: var(--ink-3);
   font-size: 13px;
-}
-
-/* ---------- 状态点 ---------- */
-
-.mark {
-  display: inline-block;
-  flex: none;
 }
 
 /* ---------- 详情页 ---------- */
@@ -748,80 +476,6 @@ h3 {
   font-feature-settings: normal;
 }
 
-.callout {
-  display: flex;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  background: var(--tray);
-  line-height: 1.55;
-}
-.callout .anticon {
-  margin-top: 4px;
-  flex: none;
-}
-.callout.stop {
-  background: var(--stop-tint);
-  border-color: #efc7c3;
-}
-.callout.stop .anticon {
-  color: var(--stop);
-}
-.callout.warn {
-  background: var(--warn-tint);
-  border-color: #efd9ad;
-}
-.callout.warn .anticon {
-  color: var(--warn);
-}
-.callout.info .anticon {
-  color: var(--teal);
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.timeline {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.timeline li {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  gap: 12px;
-  position: relative;
-  padding-bottom: 16px;
-}
-.timeline li:last-child {
-  padding-bottom: 0;
-}
-.timeline li::before {
-  content: '';
-  position: absolute;
-  left: 7px;
-  top: 18px;
-  bottom: 0;
-  width: 1px;
-  background: var(--line);
-}
-.timeline li:last-child::before {
-  display: none;
-}
-.timeline .t-mark {
-  padding-top: 5px;
-}
-.timeline .t-title {
-  font-weight: 500;
-}
-.timeline .t-meta {
-  color: var(--ink-3);
-  font-size: 13px;
-}
-
 /* ---------- 选购 ---------- */
 
 .buy {
@@ -893,45 +547,6 @@ h3 {
   display: inline-flex;
   align-items: center;
   gap: 12px;
-}
-.flag {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  overflow: hidden;
-  position: relative;
-  border-radius: 3px;
-  background: var(--tray);
-}
-/* 内描边压在国旗上，白底国旗（日本、新加坡）在白卡上也有边界 */
-.flag::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow: inset 0 0 0 1px rgb(20 35 31 / 0.16);
-  pointer-events: none;
-}
-.flag img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: cover;
-}
-.flag-md {
-  width: 40px;
-  height: 30px;
-}
-.flag-sm {
-  width: 28px;
-  height: 21px;
-  border-radius: 2px;
-}
-.flag-code {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--ink-2);
 }
 .stock {
   font-size: 13px;
@@ -1082,79 +697,6 @@ h3 {
   font-weight: 600;
   font-size: 15px;
 }
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 9px 0 0;
-  font-size: 13px;
-  font-weight: 600;
-  border: 1px solid var(--line);
-  background: var(--card);
-  white-space: nowrap;
-}
-.cell-k {
-  align-self: stretch;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 8px;
-  margin-right: 2px;
-  font-weight: 400;
-  color: var(--ink-3);
-  background: var(--tray);
-  border-right: 1px solid var(--line);
-}
-.cell.tone-ok {
-  color: var(--ok);
-}
-.cell.tone-warn {
-  color: var(--warn);
-}
-.cell.tone-stop {
-  color: var(--stop);
-}
-.cell.tone-wait {
-  color: var(--teal);
-}
-.chips {
-  align-items: center;
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 8px;
-  font-size: 12px;
-  border: 1px solid var(--line);
-  background: var(--card);
-  white-space: nowrap;
-  color: var(--ink-2);
-}
-.chip.tone-ok {
-  color: var(--ok);
-}
-.chip.tone-warn {
-  color: var(--warn);
-  background: var(--warn-tint);
-  border-color: #efd9ad;
-}
-.chip.tone-stop {
-  color: var(--stop);
-  background: var(--stop-tint);
-  border-color: #efc7c3;
-}
-.chip.tone-wait {
-  color: var(--teal);
-  background: var(--teal-tint);
-  border-color: var(--teal-tint-2);
-}
 .req-row {
   padding: 16px 22px;
   display: grid;
@@ -1181,17 +723,6 @@ h3 {
   font-weight: 500;
   letter-spacing: 0.12em;
   font-feature-settings: normal;
-}
-
-.empty {
-  padding: 48px 24px;
-  text-align: center;
-  color: var(--ink-2);
-}
-.empty h2 {
-  font-size: 18px;
-  margin-bottom: 6px;
-  color: var(--ink);
 }
 
 /* ---------- 账号页 ---------- */
@@ -1310,12 +841,6 @@ h3 {
   .exit-ip {
     font-size: 24px;
   }
-  .plate-head {
-    padding: 16px 32px 0 18px;
-  }
-  .plate-pad {
-    padding: 14px 18px 18px;
-  }
   .kv {
     grid-template-columns: 64px minmax(0, 1fr) auto;
   }
@@ -1430,14 +955,5 @@ h3 {
     white-space: normal;
     overflow-wrap: anywhere;
     text-overflow: clip;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 1ms !important;
-    transition-duration: 1ms !important;
   }
 }

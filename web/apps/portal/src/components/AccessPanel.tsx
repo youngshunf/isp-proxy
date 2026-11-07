@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { PROTOCOLS, connectionString, type Access, type Subscription } from '@isp/api-client'
 import { api, errorText, qk } from '../app/api'
 import { fmtDate } from '../lib/format'
-import { Plate } from './Plate'
+import { Plate } from '@isp/ui'
 import { PROTO_LABEL } from './ProtocolCopy'
 import { useCopy } from './useCopy'
 

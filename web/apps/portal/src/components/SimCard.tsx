@@ -4,7 +4,7 @@ import type { Subscription } from '@isp/api-client'
 import { fmtAgo } from '../lib/format'
 import { EXIT_CHECK, primaryState } from '../lib/status'
 import { Balances } from './Balances'
-import { CountryFlag, SignalBars, StateMark } from './marks'
+import { CountryFlag, SignalBars, StateMark } from '@isp/ui'
 import { ProtocolCopy } from './ProtocolCopy'
 
 /** 卡面印字：订阅编号，帮助客服与用户对同一张卡。 */

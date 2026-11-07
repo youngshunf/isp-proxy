@@ -1,9 +1,9 @@
 import type { ThemeConfig } from 'antd'
 
-// 与 styles/global.css 的 token 保持同值。
-const FONT =
+// 与 styles.css 的 token 保持同值。两端共用；各端如需微调，在此基础上浅合并。
+export const FONT_SANS =
   "'Barlow', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', system-ui, sans-serif"
-const MONO = "'Red Hat Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+export const FONT_MONO = "'Red Hat Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
 
 export const theme: ThemeConfig = {
   token: {
@@ -25,8 +25,8 @@ export const theme: ThemeConfig = {
     borderRadius: 2,
     borderRadiusLG: 2,
     borderRadiusSM: 2,
-    fontFamily: FONT,
-    fontFamilyCode: MONO,
+    fontFamily: FONT_SANS,
+    fontFamilyCode: FONT_MONO,
     fontSize: 14,
     controlHeight: 36,
     controlOutline: 'rgba(0, 80, 92, 0.18)',

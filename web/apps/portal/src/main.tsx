@@ -1,8 +1,5 @@
-import '@fontsource/barlow/400.css'
-import '@fontsource/barlow/500.css'
-import '@fontsource/barlow/600.css'
-import '@fontsource/red-hat-mono/400.css'
-import '@fontsource/red-hat-mono/500.css'
+import '@isp/ui/fonts'
+import '@isp/ui/styles.css'
 import './styles/global.css'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -13,7 +10,7 @@ import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router/dom'
 import { ApiError } from '@isp/api-client'
 import { router } from './app/router'
-import { theme } from './app/theme'
+import { theme } from '@isp/ui'
 
 const queryClient = new QueryClient({
   defaultOptions: {

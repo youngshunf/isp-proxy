@@ -7,8 +7,8 @@ import type { ExitReason, Subscription } from '@isp/api-client'
 import { api, errorText, qk } from '../app/api'
 import { fmtAgo, fmtDate, fmtDay } from '../lib/format'
 import { EXIT_CHECK, EXIT_REASON, EXIT_REQUEST } from '../lib/status'
-import { SignalBars, StateMark } from './marks'
-import { Plate } from './Plate'
+import { SignalBars, StateMark } from '@isp/ui'
+import { Plate } from '@isp/ui'
 
 interface FormValues {
   reason: ExitReason

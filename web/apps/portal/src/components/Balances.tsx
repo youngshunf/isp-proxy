@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router'
 import { remainingBytes, type Subscription } from '@isp/api-client'
 import { fmtBytes, fmtDate, fmtDay, splitBytes, splitDuration } from '../lib/format'
 import { isExpiring, isLowTraffic } from '../lib/status'
-import { Meter } from './Meter'
+import { Meter } from '@isp/ui'
 
 function GoButton({ to, children, primary }: { to: string; children: string; primary?: boolean }) {
   const navigate = useNavigate()
