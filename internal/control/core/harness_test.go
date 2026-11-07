@@ -208,9 +208,9 @@ func (x *h) resource() string {
 
 type who struct{ user, admin string }
 
-func asUser(id string) who  { return who{user: id} }
-func (x *h) asAdmin() who   { return who{admin: x.admin} }
-func (x *h) key() string    { return fmt.Sprintf("idem-key-%06d", x.seq.Add(1)) }
+func asUser(id string) who { return who{user: id} }
+func (x *h) asAdmin() who  { return who{admin: x.admin} }
+func (x *h) key() string   { return fmt.Sprintf("idem-key-%06d", x.seq.Add(1)) }
 
 type resp struct {
 	status int
@@ -281,9 +281,9 @@ type idOnly struct {
 func (x *h) createSub(user string, months int) (sub, task string) {
 	x.t.Helper()
 	var res struct {
-		Order        struct{ ID string }       `json:"order"`
-		Subscription struct{ ID string }       `json:"subscription"`
-		Task         *struct{ ID string }      `json:"task"`
+		Order        struct{ ID string }  `json:"order"`
+		Subscription struct{ ID string }  `json:"subscription"`
+		Task         *struct{ ID string } `json:"task"`
 	}
 	x.ok(x.do(x.asAdmin(), "POST", "/admin-api/subscriptions", map[string]any{"userId": user, "planId": x.plan, "months": months,
 		"payment": map[string]any{"method": "manual_transfer", "amount": map[string]any{"amount": 3000 * months, "currency": "CNY"},
