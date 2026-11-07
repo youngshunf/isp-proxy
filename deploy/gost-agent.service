@@ -1,0 +1,27 @@
+# /etc/systemd/system/gost-agent.service —— 带 agent 的 GOST 数据面（示例）。
+# 接入端口由控制面下发（端口池默认 20000-29999）；不开放 GOST 原生 API（docs/06 §2）。
+# -agent-config 参数由 M3（A-W8）接入 cmd/gost，此单元在那之前只作占位。
+[Unit]
+Description=GOST data plane with ISP agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gost
+Group=gost
+ExecStart=/usr/local/bin/gost -agent-config /etc/gost-agent/agent.yaml
+Restart=always
+RestartSec=1s
+# 本地持久化（累计用量、已应用版本）所在目录。
+StateDirectory=gost-agent
+# 绑定 1024 以上端口不需要特权；如需低端口再加 CAP_NET_BIND_SERVICE。
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/gost-agent
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

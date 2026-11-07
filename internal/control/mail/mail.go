@@ -28,7 +28,10 @@ const (
 	TemplateResetPassword = "reset_password"        // 找回密码验证码：data.code
 	TemplateSetPassword   = "set_password"          // 管理员代建用户首次设置密码：data.code
 	TemplateAccountExists = "notice_account_exists" // 已注册邮箱再次注册时的提醒（不含验证码）
+	TemplateNoticeReady   = "notice_ready"          // 订阅开通就绪：data.subscriptionId
 )
+
+// 其他 notice_* 模板（业务通知）没有专门文案时使用通用文案，不让业务事务因缺模板失败。
 
 // Message 是待发送的邮件。
 type Message struct {
@@ -44,7 +47,7 @@ type Execer interface {
 
 // Enqueue 把邮件写入发件箱，返回邮件 ID。应在业务事务内调用。
 func Enqueue(ctx context.Context, db Execer, box *secret.Box, m Message) (string, error) {
-	if _, ok := templates[m.Template]; !ok {
+	if _, ok := lookup(m.Template); !ok {
 		return "", fmt.Errorf("mail: 未知模板 %q", m.Template)
 	}
 	if !strings.Contains(m.To, "@") {
@@ -135,15 +138,32 @@ var templates = map[string]template{
 		return "您好：\n\n管理员已为您开通 " + b.Name + " 账号。请打开 " + b.SiteURL + "/forgot-password ，用下面的验证码设置登录密码：\n\n    " +
 			d["code"] + "\n\n验证码 15 分钟内有效，只能使用一次；过期后可在同一页面重新获取。\n"
 	}},
+	TemplateNoticeReady: {"您的 IP 已开通", func(b Brand, d map[string]string) string {
+		return "您好：\n\n您购买的 IP 已开通，可以登录 " + b.SiteURL + "/ips 查看接入信息。\n"
+	}},
 	TemplateAccountExists: {"该邮箱已有账号", func(b Brand, d map[string]string) string {
 		return "您好：\n\n有人用这个邮箱注册 " + b.Name + "，但该邮箱已经有账号。\n如果是您本人，请直接登录；忘记密码可以在 " +
 			b.SiteURL + "/forgot-password 找回。\n如果不是您本人操作，请忽略本邮件。\n"
 	}},
 }
 
+var genericNotice = template{"账号通知", func(b Brand, d map[string]string) string {
+	return "您好：\n\n您的 " + b.Name + " 账号有新的动态，请登录 " + b.SiteURL + " 查看。\n"
+}}
+
+func lookup(name string) (template, bool) {
+	if t, ok := templates[name]; ok {
+		return t, true
+	}
+	if strings.HasPrefix(name, "notice_") {
+		return genericNotice, true
+	}
+	return template{}, false
+}
+
 // Render 渲染模板。
 func Render(b Brand, tmpl string, data map[string]string) (subject, body string, err error) {
-	t, ok := templates[tmpl]
+	t, ok := lookup(tmpl)
 	if !ok {
 		return "", "", fmt.Errorf("mail: 未知模板 %q", tmpl)
 	}

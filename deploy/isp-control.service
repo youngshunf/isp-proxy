@@ -1,0 +1,36 @@
+# /etc/systemd/system/isp-control.service —— ISP 代理平台控制面（示例）。
+# 启动时自动执行数据库迁移；:8080 只监听本机（反向代理之后），:8443 为节点 mTLS 接口。
+[Unit]
+Description=ISP proxy platform control plane (isp-control)
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=isp-control
+Group=isp-control
+EnvironmentFile=/etc/isp-control/isp-control.env
+ExecStart=/usr/local/bin/isp-control serve -config /etc/isp-control/isp-control.yaml
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=20s
+
+# 加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadOnlyPaths=/etc/isp-control
+# mail.mode = file 时的投递目录（生产用 smtp 时可删去）。
+StateDirectory=isp-control
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

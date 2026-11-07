@@ -30,6 +30,13 @@ make all
 | `internal/agent/` | ISP 平台节点 agent 数据面：按订阅计量（`meter.go`）、连接表与 GOST 组件注册、失败即拒绝的出口链（`gost.go`）、订阅状态与持久化（`agent.go`、`store.go`）。设计见 `docs/04-计量与执行方案.md` |
 | `internal/agent/node/` | 节点运行时：读 agent 配置（`deploy/agent.example.yaml`），mTLS 连控制面按期望状态对账、上报、探测，落盘最后已应用状态（`desired.json`，0600，含凭据）。由 `gost -agent-config <file>` 启动；该模式不开放 GOST 原生 API、禁止重载（重载会清空 `isp-auth` 与出口链并导致直连，见 docs/04 §2） |
 | `internal/agent/agenttest/` | 测试辅助：伪控制面（`agentproto.NewHandler` + 开发证书）、伪 ISP 上游（http/https/socks5）、三种协议客户端 |
+| `cmd/isp-control/` | 控制面入口：`serve`（启动即迁移，`:8080` 对外 API，`:8443` 节点 mTLS）、`migrate`、`dev-certs`、`admin create`、`seed-dev`；YAML 配置 + 环境变量密钥（docs/06 §2） |
+| `internal/control/httpx/` | HTTP 公共约定：`*httpx.Error` 与错误码映射、严格 `DecodeJSON`、`Route{Method, Pattern, Auth}`、`UserFrom`/`AdminFrom`、`ClientIP` |
+| `internal/control/api/` | 组装全部业务包路由（`Assemble`，ctl-core 接入点在 `wiring.go`），统一执行 CSRF 双提交、会话校验、`VerifiedUser`/封禁只读/viewer 只读；契约测试断言路由集合 = `apispec`（暂缺清单 `notYetImplemented`） |
+| `internal/control/account/` | 用户邮箱账号（C-W10）：注册、验证、重发、登录、找回、改密、会话校验；不泄露邮箱是否注册；库内限流 |
+| `internal/control/admin/` | 管理员（C-W8）：密码 + TOTP 两步登录（首次绑定、恢复码）、管理员会话、用户管理、审计查询、`admin.Create`（CLI） |
+| `internal/control/{audit,mail,session,ratelimit,secret}/` | 审计写入（`audit.Record(ctx, tx, …)`）与查询；邮件发件箱 + SMTP/文件投递；Cookie 与 CSRF；`rate_events` 滑动窗口；AES-GCM/MAC/argon2id |
+| `deploy/` | 单节点部署示例（systemd、nginx、`backup.sh`、配置与环境变量示例、`seed.example.sql`），全部为占位值 |
 
 ## CLI Flags
 
@@ -71,5 +78,7 @@ All components register via `init()` side-effects in their packages. `cmd/gost/r
 E2E tests are in `tests/e2e/` — integration tests using the built binary. Run with `go test ./tests/e2e/...` only when explicitly authorized (see PROJECT.md).
 
 `internal/agent/` has in-process tests on loopback only (fake ISP upstream, no external network): `go test ./internal/agent/...` (~20s incl. node runtime; add `-race` for concurrency changes). `go test ./cmd/gost/` builds the real binary and runs it with `-agent-config` against a fake control plane (loopback only; `-short` skips the binary tests). They rely on GOST internals listed in docs/04 §2 — rerun them after any `go-gost/x` upgrade.
+
+Control plane: `go test ./internal/control/... ./cmd/isp-control/...` — DB tests use a throwaway PostgreSQL from `pgtest` (local `initdb`/`pg_ctl`, or `ISP_TEST_DATABASE_URL`; skipped with a reason if neither exists, set `ISP_TEST_REQUIRE_DB=1` to fail instead). HTTP tests run against the real router (`internal/control/api`); mail goes to a file-drop dir, never real SMTP.
 
 `web/` tests: `cd web && corepack pnpm@10.28.1 -r typecheck && corepack pnpm@10.28.1 -r test` (Vitest + Testing Library; mock API only). Dev server: `corepack pnpm@10.28.1 dev:portal` → http://127.0.0.1:5173. Installing packages needs network access.

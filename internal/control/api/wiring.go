@@ -2,9 +2,24 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/go-gost/gost/internal/agentproto"
 	"github.com/go-gost/gost/internal/control/admin"
+	"github.com/go-gost/gost/internal/control/alert"
+	"github.com/go-gost/gost/internal/control/audit"
+	"github.com/go-gost/gost/internal/control/catalog"
+	"github.com/go-gost/gost/internal/control/httpx"
+	"github.com/go-gost/gost/internal/control/inventory"
+	"github.com/go-gost/gost/internal/control/kernel"
+	"github.com/go-gost/gost/internal/control/mail"
+	"github.com/go-gost/gost/internal/control/probe"
+	"github.com/go-gost/gost/internal/control/secret"
+	"github.com/go-gost/gost/internal/control/task"
+	"github.com/jackc/pgx/v5"
 )
 
 // coreParts 是 ctl-core（账本、订单、订阅、库存、任务、用量、节点同步、检测、告警、换出口申请、调度）
@@ -17,15 +32,82 @@ type coreParts struct {
 	background []func(ctx context.Context)
 }
 
-// wireCore 构造 ctl-core 的业务包。这是接入 ctl-core 的唯一位置：
+// wireCore 构造 ctl-core 的业务包。这是接入 ctl-core 的唯一位置。
 //
-// TODO(ctl-core)：合入 ctl-core 后在这里按 d.Pool、d.Box、d.Now 构造各业务包，
-//   - 把每个包（实现 Routes() []httpx.Route）加入 domains，并从 contract_test.go 的 notYetImplemented 中删去对应路由；
+// 已接入：目录与规则（catalog）、库存与节点（inventory）、出口检测（probe）、变更任务（task）、告警（alert）。
+//
+// TODO(ctl-core)：以下包合入后在这里接上，并从 contract_test.go 的 notYetImplemented 中删去对应路由：
+//   - 订阅（用户端与管理端订阅路由）、订单与收款、换出口申请、权益划转、运营概览；
 //   - adminHooks.UserStatusChanged 接订阅包“用户状态变化 → 该用户全部订阅生成新期望版本”（封禁 ≤1 秒断开，R-13.8）；
 //     adminHooks.UserSubscriptions / UserRecentOrders 接用户详情页的订阅与订单列表；
-//   - agent 与 hub 接节点同步包的 agentproto.Server 实现；
+//   - agent 接节点同步包的 agentproto.Server 实现（hub 已是 kernel.Env.Hub）；
 //   - background 接调度循环（docs/06 §3，每 5 秒）。
 func wireCore(d *Deps) (coreParts, error) {
-	_ = d
-	return coreParts{}, nil
+	env, err := kernel.NewEnv(d.Pool, kernel.Config{Box: d.Box}, nowClock(d.Now), mailer{box: d.Box, kick: d.Mail}, auditor{}, d.Logger)
+	if err != nil {
+		return coreParts{}, err
+	}
+	probes := probe.New(env)
+	inv := inventory.New(env)
+	return coreParts{
+		domains: []Domain{catalog.New(env), RoutesFunc(inv.UpstreamRoutes), RoutesFunc(inv.NodeRoutes), probes,
+			task.New(env, probes), alert.New(env)},
+		hub: env.Hub,
+	}, nil
+}
+
+// RoutesFunc 把返回路由的函数适配为 Domain（一个包导出多组路由时使用）。
+type RoutesFunc func() []httpx.Route
+
+// Routes 实现 Domain。
+func (f RoutesFunc) Routes() []httpx.Route { return f() }
+
+// nowClock 把 Deps.Now 适配为 clock.Clock。
+type nowClock func() time.Time
+
+func (f nowClock) Now() time.Time { return f().UTC().Truncate(time.Microsecond) }
+
+// mailer 把 kernel.Mailer 适配到发件箱（与业务同事务写入，提交后唤醒投递）。
+type mailer struct {
+	box  *secret.Box
+	kick interface{ Kick() }
+}
+
+func (m mailer) Enqueue(ctx context.Context, tx pgx.Tx, to, template string, payload map[string]any) error {
+	data := make(map[string]string, len(payload))
+	for k, v := range payload {
+		data[k] = fmt.Sprint(v)
+	}
+	if _, err := mail.Enqueue(ctx, tx, m.box, mail.Message{To: to, Template: template, Data: data}); err != nil {
+		return err
+	}
+	if m.kick != nil {
+		// 投递循环会在下一轮（≤2 秒）取到；事务未提交前取不到，提前唤醒无害。
+		m.kick.Kick()
+	}
+	return nil
+}
+
+// auditor 把 kernel.Auditor 适配到 audit.Record。target 形如 "order:ord_…"；detail 任意可 JSON 编码的值。
+type auditor struct{}
+
+func (auditor) Record(ctx context.Context, tx pgx.Tx, adminID, action, target string, detail any) error {
+	e := audit.Entry{Action: action, AdminID: adminID}
+	if typ, id, ok := strings.Cut(target, ":"); ok {
+		e.TargetType, e.TargetID = typ, id
+	} else if target != "" {
+		e.TargetType = target
+	}
+	if detail != nil {
+		b, err := json.Marshal(detail)
+		if err != nil {
+			return fmt.Errorf("audit: 编码 detail: %w", err)
+		}
+		m := map[string]any{}
+		if err := json.Unmarshal(b, &m); err != nil {
+			m = map[string]any{"value": json.RawMessage(b)}
+		}
+		e.Details = m
+	}
+	return audit.Record(ctx, tx, e)
 }

@@ -55,3 +55,8 @@ __pycache__/
 # Impeccable 评审截图与问答记录（本地生成）
 .impeccable/review/
 .impeccable/questions/
+
+# isp-control 本地开发产物（开发证书、文件投递的邮件、二进制）
+/dev-certs/
+/var/
+/isp-control
