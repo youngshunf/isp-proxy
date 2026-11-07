@@ -412,7 +412,7 @@ func (e *Env) StartControl() {
 // StopControl 停止 isp-control（模拟控制面离线）。
 func (e *Env) StopControl() { e.Control.stop() }
 
-// RestartGost 重新启动 gost（崩溃后或正常停止后）。
+// RestartGost 重新启动 gost（崩溃后、正常停止后，或仍在运行时先正常停止）。
 func (e *Env) RestartGost() {
 	e.t.Helper()
 	e.Gost.start(e.t)

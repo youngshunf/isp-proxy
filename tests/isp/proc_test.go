@@ -36,6 +36,10 @@ func newProc(name, logPath, bin string, env []string, args ...string) *proc {
 // start 启动（或重启）进程。
 func (p *proc) start(t testing.TB) {
 	t.Helper()
+	// 仍在运行时先停掉旧进程，否则旧进程脱离跟踪成为孤儿（继续占用端口，干扰其他场景）。
+	if p.running() {
+		p.stop()
+	}
 	f, err := os.OpenFile(p.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
