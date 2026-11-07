@@ -43,7 +43,9 @@ type coreParts struct {
 //   - agent 接节点同步包的 agentproto.Server 实现（hub 已是 kernel.Env.Hub）；
 //   - background 接调度循环（docs/06 §3，每 5 秒）。
 func wireCore(d *Deps) (coreParts, error) {
-	env, err := kernel.NewEnv(d.Pool, kernel.Config{Box: d.Box}, nowClock(d.Now), mailer{box: d.Box, kick: d.Mail}, auditor{}, d.Logger)
+	kcfg := d.Kernel
+	kcfg.Box = d.Box
+	env, err := kernel.NewEnv(d.Pool, kcfg, nowClock(d.Now), mailer{box: d.Box, kick: d.Mail}, auditor{}, d.Logger)
 	if err != nil {
 		return coreParts{}, err
 	}

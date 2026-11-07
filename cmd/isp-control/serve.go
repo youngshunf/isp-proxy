@@ -129,8 +129,17 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer, hooks *serve
 	worker := &mail.Worker{Pool: pool, Box: box, Sender: sender, From: cfg.Mail.From,
 		Brand: mail.Brand{Name: cfg.Mail.Brand, SiteURL: cfg.Mail.SiteURL}, Logger: log}
 	worker.Init()
-	plat, err := api.Assemble(api.Deps{Pool: pool, Box: box, Cookies: session.Cookies{Secure: cfg.SecureCookies},
-		Mail: worker, Issuer: cfg.TOTPIssuer, Logger: log})
+	deps := api.Deps{Pool: pool, Box: box, Cookies: session.Cookies{Secure: cfg.SecureCookies},
+		Mail: worker, Issuer: cfg.TOTPIssuer, Logger: log, Kernel: cfg.Core.Kernel()}
+	var devClock *offsetClock
+	if cfg.Dev.Enabled() {
+		log.Warn("已启用 dev 配置（只用于开发与平台 E2E，生产不得配置）", "clock_offset_file", cfg.Dev.ClockOffsetFile)
+		if cfg.Dev.ClockOffsetFile != "" {
+			devClock = newOffsetClock(cfg.Dev.ClockOffsetFile, log)
+			deps.Now = devClock.Now
+		}
+	}
+	plat, err := api.Assemble(deps)
 	if err != nil {
 		return err
 	}
@@ -148,6 +157,9 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer, hooks *serve
 	}
 	goRun(func() { worker.Run(ctx) })
 	goRun(func() { pruneLoop(ctx, pool, log) })
+	if devClock != nil {
+		goRun(func() { devClock.run(ctx) })
+	}
 	for _, bg := range plat.Background {
 		bg := bg
 		goRun(func() { bg(ctx) })

@@ -12,6 +12,7 @@ import (
 	"github.com/go-gost/gost/internal/control/account"
 	"github.com/go-gost/gost/internal/control/admin"
 	"github.com/go-gost/gost/internal/control/httpx"
+	"github.com/go-gost/gost/internal/control/kernel"
 	"github.com/go-gost/gost/internal/control/secret"
 	"github.com/go-gost/gost/internal/control/session"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,6 +32,8 @@ type Deps struct {
 	Issuer  string              // TOTP 发行方名称
 	Now     func() time.Time    // 默认 time.Now
 	Logger  *slog.Logger
+	// Kernel 是业务内核的可调项（检测端点、调度间隔、任务与探测超时等）；Box 由 Assemble 填写。
+	Kernel kernel.Config
 
 	// 可选：测试覆盖限流。
 	AccountLimits *account.Limits
