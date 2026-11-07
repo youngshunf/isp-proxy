@@ -55,7 +55,7 @@ type EnvOptions struct {
 	Exits int
 	// Extra 是额外的出口（候选、故障出口等）；默认不验证的需显式设 NoVerify。
 	Extra []ExitSpec
-	// PortRange 是节点端口池大小（默认 240）。
+	// PortRange 是节点端口池大小（默认 240，最大 250）。
 	PortRange int
 	// Rules 修改默认规则（发布前调用）。
 	Rules func(*RulesInput)
@@ -103,8 +103,29 @@ type Env struct {
 
 var envSeq atomic.Int64
 
-// portBase 为每个环境分配互不重叠的节点端口池（30000 起，每个环境 400）。
-func portBase() int { return 30000 + int(envSeq.Add(1)-1)%40*400 }
+// portBase 为每个环境分配互不重叠的节点端口池：20000～48999 切成每段 250 个端口，按序轮转；
+// 段内有端口已被占用（其他进程或系统临时端口）时跳到下一段。
+func portBase(n int) int {
+	const lo, stride, slots = 20000, 250, 116
+	for range slots {
+		base := lo + int(envSeq.Add(1)-1)%slots*stride
+		if portsFree(base, n) {
+			return base
+		}
+	}
+	return lo + int(envSeq.Add(1)-1)%slots*stride
+}
+
+func portsFree(base, n int) bool {
+	for p := base; p < base+n; p++ {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err != nil {
+			return false
+		}
+		ln.Close()
+	}
+	return true
+}
 
 func randHex(n int) string {
 	b := make([]byte, n)
@@ -142,7 +163,7 @@ func NewEnv(t *testing.T, opts EnvOptions) *Env {
 	e.ClockFile = filepath.Join(e.Dir, "clock-offset")
 	e.DataDir = filepath.Join(e.Dir, "agent-data")
 	e.AgentCfg = filepath.Join(e.Dir, "agent.yaml")
-	pb := portBase()
+	pb := portBase(opts.PortRange)
 	e.Ports = [2]int{pb, pb + opts.PortRange - 1}
 	t.Cleanup(e.cleanup)
 

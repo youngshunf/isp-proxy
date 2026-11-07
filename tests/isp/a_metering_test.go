@@ -427,8 +427,9 @@ func TestA18_WrongPasswordAndJunkNotMetered(t *testing.T) {
 				}
 				defer conn.Close()
 				conn.SetDeadline(time.Now().Add(3 * time.Second))
+				// 首行总以完整标记开头（GOST 只记录首个请求行），其后按随机偏移错位，覆盖各种截断。
 				off := rand.IntN(64)
-				_, _ = conn.Write(junk[off:])
+				_, _ = conn.Write(append([]byte(junkMark), junk[off:]...))
 				buf := make([]byte, 4096)
 				for {
 					if _, err := conn.Read(buf); err != nil {
