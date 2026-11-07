@@ -39,6 +39,8 @@ type Backend struct {
 	EchoIP string
 	Addr   string
 	Hits   atomic.Int64
+	// IPHits 只计 /ip（客户请求），不含出口检测的 /echo。
+	IPHits atomic.Int64
 }
 
 // StartBackend 启动目标端点。
@@ -49,6 +51,7 @@ func StartBackend(t testing.TB, label, echoIP string) *Backend {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ip", func(w http.ResponseWriter, r *http.Request) {
 		b.Hits.Add(1)
+		b.IPHits.Add(1)
 		io.WriteString(w, label)
 	})
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {

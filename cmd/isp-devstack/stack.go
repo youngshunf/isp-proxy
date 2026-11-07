@@ -107,7 +107,7 @@ func (s *stack) bootstrap(ctx context.Context, root string) error {
 		{"生成开发证书并启动 isp-control", s.startControl},
 		{"写入 seed-dev 种子数据", s.seed},
 		{"建立管理员并绑定 TOTP", s.createAdmin},
-		{"发布立即生效的规则版本", s.publishRules},
+		{"检查当前规则的收款说明", s.publishRules},
 		{"登记节点并启动 gost（agent）", s.startNode},
 		{"录入并验证上游库存", s.registerExits},
 	}
@@ -314,9 +314,13 @@ func (s *stack) createAdmin(context.Context) error {
 	return nil
 }
 
-// publishRules 以种子规则（带示例收款说明）为模板发布一个立即生效的版本：种子与内置规则的 effective_from
-// 是固定日期，本机时钟早于它时目录与下单会返回 412（docs/06 §8.1）。
+// publishRules 确保当前生效的规则带收款说明。内置规则自始生效但收款说明为空（下单 412）；seed-dev 的
+// 带示例收款说明的版本 effective_from 是固定时刻，本机时钟早于它时还没生效。这时以它为模板发布一个立即生效的版本。
 func (s *stack) publishRules(context.Context) error {
+	if s.paymentReady() {
+		return nil
+	}
+	s.logf("当前规则还没有收款说明（种子规则尚未到生效时刻），发布一个立即生效的副本")
 	var items []map[string]any
 	if err := s.adm.do("GET", "/rules", nil, &items, ""); err != nil {
 		return err
@@ -341,6 +345,21 @@ func (s *stack) publishRules(context.Context) error {
 	in["version"] = fmt.Sprintf("R-%s.%d", now.Format("2006-01-02"), now.Unix()%1_000_000)
 	in["effectiveFrom"] = now.Format(time.RFC3339)
 	return s.adm.do("POST", "/rules", in, nil, "")
+}
+
+// paymentReady 报告前台目录当前是否带收款说明（没有时目录返回 412 或收款方为空）。
+func (s *stack) paymentReady() bool {
+	resp, err := http.Get(s.base + "/api/catalog")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var c struct {
+		Payment struct {
+			Payee string `json:"payee"`
+		} `json:"payment"`
+	}
+	return resp.StatusCode == http.StatusOK && json.NewDecoder(resp.Body).Decode(&c) == nil && c.Payment.Payee != ""
 }
 
 type nodeView struct {

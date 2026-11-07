@@ -141,6 +141,9 @@ func stop() {
 	_ = os.RemoveAll(shared.dir)
 }
 
+// Shutdown 停止本地共享实例（自己写 TestMain、在 m.Run 之后还要清理其他资源时使用；Main 已包含它）。
+func Shutdown() { stop() }
+
 // Main 运行测试，结束后停止共享实例。在 TestMain 中调用：func TestMain(m *testing.M) { pgtest.Main(m) }。
 func Main(m *testing.M) {
 	code := m.Run()

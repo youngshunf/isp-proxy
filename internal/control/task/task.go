@@ -588,28 +588,48 @@ type running struct {
 	Order, ExitRequest   *string
 	ActorKind            string
 	ActorUser, ActorAdmn *string
+	VerifyProbe          *string // 切换后检测（换出口、组合更换），见 startVerify
 }
 
 func lockRunning(ctx context.Context, tx *kernel.Tx, subID string) (*running, error) {
 	r := &running{}
 	err := tx.QueryRow(ctx, `SELECT id, subscription_id, kind, COALESCE(target_version, 0), new_access_id, new_exit_id, order_id,
-	                            exit_request_id, requested_by_kind, requested_by_user, requested_by_admin
+	                            exit_request_id, requested_by_kind, requested_by_user, requested_by_admin, verify_probe_id
 	                          FROM tasks WHERE subscription_id = $1 AND state = 'running' FOR UPDATE`, subID).
-		Scan(&r.ID, &r.Sub, &r.Kind, &r.Target, &r.NewAccess, &r.NewExit, &r.Order, &r.ExitRequest, &r.ActorKind, &r.ActorUser, &r.ActorAdmn)
+		Scan(&r.ID, &r.Sub, &r.Kind, &r.Target, &r.NewAccess, &r.NewExit, &r.Order, &r.ExitRequest, &r.ActorKind, &r.ActorUser, &r.ActorAdmn,
+			&r.VerifyProbe)
 	if kernel.IsNoRows(err) {
 		return nil, nil
 	}
 	return r, err
 }
 
-// OnReport 处理节点对某订阅的回报：已应用版本达到目标即成功；目标版本下发失败即失败并回滚。
-// 调用方须已对订阅行加锁。
+// 切换后检测的失败码（tasks.failure_code）。
+const (
+	CodeExitCheckFailed  = "exit_check_failed"  // 经新出口的检测失败：回滚并隔离候选资源
+	CodeExitCheckTimeout = "exit_check_timeout" // 任务超时前检测没有结果：回滚，资源回到可售
+)
+
+// needsVerify 报告任务是否要在节点应用后经新出口检测才能成功（R-11.6）：换出口与组合更换。
+// 开通（fulfill）就绪后另有检测，换接入不改出口。
+func needsVerify(r *running) bool {
+	return r.NewExit != nil && (r.Kind == "exit_change" || r.Kind == "combined")
+}
+
+// OnReport 处理节点对某订阅的回报：已应用版本达到目标即成功（换出口类先经新出口检测，见 startVerify）；
+// 目标版本下发失败即失败并回滚。调用方须已对订阅行加锁。
 func (s *Service) OnReport(ctx context.Context, tx *kernel.Tx, subID string, applied uint64, applyErr *agentproto.ApplyError) error {
 	r, err := lockRunning(ctx, tx, subID)
 	if err != nil || r == nil || r.Target == 0 {
 		return err
 	}
 	if int64(applied) >= r.Target {
+		if needsVerify(r) {
+			if r.VerifyProbe != nil {
+				return nil // 检测已下发，等结果（OnVerifyResult）或超时（FailTimedOut）
+			}
+			return s.startVerify(ctx, tx, r)
+		}
 		return s.succeed(ctx, tx, r)
 	}
 	if applyErr != nil && int64(applyErr.Version) >= r.Target {
@@ -620,6 +640,52 @@ func (s *Service) OnReport(ctx context.Context, tx *kernel.Tx, subID string, app
 		return s.fail(ctx, tx, r, applyErr.Code, "节点下发失败："+msg, false)
 	}
 	return nil
+}
+
+// startVerify 节点已应用新出口：经新绑定下发出口检测（走节点探测通道），任务保持 running（订阅仍显示 changing）。
+// 提交前的比较探测只说明当时可用；候选可能在比较之后故障，切换后必须再确认一次（R-11.6）。
+func (s *Service) startVerify(ctx context.Context, tx *kernel.Tx, r *running) error {
+	id, err := s.probes.CreateBindingCheck(ctx, tx, r.Sub, *r.NewExit)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE tasks SET verify_probe_id = $2 WHERE id = $1`, r.ID, id)
+	return err
+}
+
+// LockVerifyProbe 若 probeID 是某个进行中任务的切换后检测，对其订阅行加锁并返回订阅 ID，否则返回空串。
+// 在写入探测结果之前调用，保持与节点上报相同的加锁顺序（节点 → 订阅）。
+func (s *Service) LockVerifyProbe(ctx context.Context, tx *kernel.Tx, probeID string) (string, error) {
+	var sub string
+	err := tx.QueryRow(ctx, `SELECT s.id FROM tasks t JOIN subscriptions s ON s.id = t.subscription_id
+	                          WHERE t.verify_probe_id = $1 AND t.state = 'running' FOR UPDATE OF s`, probeID).Scan(&sub)
+	if kernel.IsNoRows(err) {
+		return "", nil
+	}
+	return sub, err
+}
+
+// OnVerifyResult 处理切换后检测的结果：通过则任务成功；失败则整体回到原接入与原出口，候选资源隔离并告警。
+// 调用方须已用 LockVerifyProbe 对订阅行加锁，并已写入探测结果。
+func (s *Service) OnVerifyResult(ctx context.Context, tx *kernel.Tx, subID, probeID string) error {
+	r, err := lockRunning(ctx, tx, subID)
+	if err != nil || r == nil || r.VerifyProbe == nil || *r.VerifyProbe != probeID {
+		return err
+	}
+	var result string
+	var errText *string
+	err = tx.QueryRow(ctx, `SELECT result, error FROM probes WHERE id = $1 AND status = 'done'`, probeID).Scan(&result, &errText)
+	if kernel.IsNoRows(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if result != "failed" {
+		return s.succeed(ctx, tx, r)
+	}
+	// 节点已经应用过新配置（新端口监听过），按超时口径处理端口：进入冷却，不立即释放。
+	return s.fail(ctx, tx, r, CodeExitCheckFailed, "切换后经新出口检测失败："+kernel.StrOr(errText, "探测失败"), true)
 }
 
 func (s *Service) succeed(ctx context.Context, tx *kernel.Tx, r *running) error {
@@ -730,8 +796,11 @@ func (s *Service) succeed(ctx context.Context, tx *kernel.Tx, r *running) error 
 		if err := alert.Resolve(ctx, tx, now, "exit_change_failed:"+r.Sub); err != nil {
 			return err
 		}
-		if _, err := s.probes.CreateExitCheck(ctx, tx, r.Sub, nil); err != nil {
-			return err
+		// 切换后检测已经写入新绑定的检测结果，不必再检测一次。
+		if r.VerifyProbe == nil {
+			if _, err := s.probes.CreateExitCheck(ctx, tx, r.Sub, nil); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -816,7 +885,8 @@ func (s *Service) fail(ctx context.Context, tx *kernel.Tx, r *running, code, rea
 		if err := tx.QueryRow(ctx, `UPDATE exit_bindings SET state = 'failed' WHERE id = $1 RETURNING resource_id`, *r.NewExit).Scan(&res); err != nil {
 			return err
 		}
-		if err := inventory.ReturnToStock(ctx, tx, res, code == agentproto.ApplyExitInvalid, reason); err != nil {
+		quarantine := code == agentproto.ApplyExitInvalid || code == CodeExitCheckFailed
+		if err := inventory.ReturnToStock(ctx, tx, res, quarantine, reason); err != nil {
 			return err
 		}
 	}
@@ -883,7 +953,11 @@ func (s *Service) FailTimedOut(ctx context.Context) error {
 			if r == nil {
 				continue
 			}
-			if err := s.fail(ctx, tx, r, "node_timeout", "节点未在规定时间内应用配置（可能离线）", true); err != nil {
+			code, reason := "node_timeout", "节点未在规定时间内应用配置（可能离线）"
+			if r.VerifyProbe != nil {
+				code, reason = CodeExitCheckTimeout, "节点已应用新出口，但切换后检测未在规定时间内完成"
+			}
+			if err := s.fail(ctx, tx, r, code, reason, true); err != nil {
 				return err
 			}
 		}

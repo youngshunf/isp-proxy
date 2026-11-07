@@ -293,15 +293,25 @@ func (s *Server) nodeAlerts(ctx context.Context, tx *kernel.Tx, nodeID string, p
 func (s *Server) ProbeResults(ctx context.Context, nodeID string, rs []agentproto.ProbeResult) error {
 	return s.env.InTx(ctx, func(tx *kernel.Tx) error {
 		var ok bool
-		if err := tx.QueryRow(ctx, `SELECT true FROM nodes WHERE id = $1`, nodeID).Scan(&ok); err != nil {
+		// 先锁节点行：与 Report 相同的加锁顺序（节点 → 订阅），切换后检测的结果要锁订阅行。
+		if err := tx.QueryRow(ctx, `SELECT true FROM nodes WHERE id = $1 FOR UPDATE`, nodeID).Scan(&ok); err != nil {
 			if kernel.IsNoRows(err) {
 				return agentproto.ErrUnknownNode
 			}
 			return err
 		}
 		for _, r := range rs {
+			sub, err := s.tasks.LockVerifyProbe(ctx, tx, r.ProbeID)
+			if err != nil {
+				return err
+			}
 			if err := s.probes.ApplyResult(ctx, tx, nodeID, r); err != nil {
 				return err
+			}
+			if sub != "" {
+				if err := s.tasks.OnVerifyResult(ctx, tx, sub, r.ProbeID); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

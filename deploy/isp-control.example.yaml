@@ -28,6 +28,18 @@ core:
   # 开发与测试用静态映射；生产应接 GeoIP 库。
   exit_countries:
     203.0.113.10: us
+  # 以下调度参数一般不改（零值取内核默认值）；平台 E2E（tests/isp）调小以加快场景。
+  # scheduler_interval: 5s     # 调度器周期（到期、保留期、预留回收、冷却、任务超时）
+  # task_timeout: 2m           # 变更任务超时
+  # probe_timeout: 1m          # 探测超时
+  # exit_check_interval: 1h    # 定期出口检测间隔
+  # node_offline_after: 1m     # 多久没有上报判为节点离线
+
+# 开发专用（只用于本机开发与平台 E2E，生产不得配置；配置后启动时打 WARN 日志）。
+# dev:
+#   # 业务时钟偏移文件：内容为 Go 时长（如 169h），每 200ms 重读；控制面全部业务时间（会话、预留、到期、
+#   # 保留期、冷却、频率窗口）按 当前时间 + 偏移 计算。节点计时器不受影响。
+#   clock_offset_file: /tmp/isp-clock-offset
 
 mail:
   # smtp：生产；file：开发与测试，把邮件写成 .eml 文件，不发真实邮件。

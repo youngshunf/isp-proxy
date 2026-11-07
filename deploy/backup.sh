@@ -6,25 +6,27 @@
 # 建议用 systemd timer 或 cron 每天执行一次，并把备份目录同步到另一台机器。
 #
 # 恢复（R-14.6）：
-#   pg_restore --clean --if-exists --no-owner -d "$ISP_DATABASE_URL" isp-control-YYYYmmdd-HHMMSS.dump
+#   pg_restore --clean --if-exists --no-owner -d "${ISP_DATABASE_URL}" isp-control-YYYYmmdd-HHMMSS.dump
 #   恢复后启动 isp-control；节点上报的累计用量以 GREATEST 合并，不会因旧快照回退（docs/06 §5）。
 # 注意：ISP_SECRET_KEY 不在数据库里，必须另行安全备份，否则无法解密接入密码与 TOTP 密钥。
 set -euo pipefail
+# 变量一律写成 ${var}：bash 3.2（macOS）在 UTF-8 下会把紧跟的全角标点（如“（”）的首字节当作变量名的一部分。
 
 : "${ISP_DATABASE_URL:?需要 ISP_DATABASE_URL}"
 dir="${1:-/var/backups/isp-control}"
 keep="${KEEP_DAYS:-14}"
 
 umask 077
-mkdir -p "$dir"
+mkdir -p "${dir}"
 ts="$(date -u +%Y%m%d-%H%M%S)"
-tmp="$dir/.isp-control-$ts.dump.partial"
-out="$dir/isp-control-$ts.dump"
+tmp="${dir}/.isp-control-${ts}.dump.partial"
+out="${dir}/isp-control-${ts}.dump"
 
-pg_dump --format=custom --compress=6 --no-owner --no-privileges --file="$tmp" "$ISP_DATABASE_URL"
+pg_dump --format=custom --compress=6 --no-owner --no-privileges --file="${tmp}" "${ISP_DATABASE_URL}"
 # 校验备份可读（列出目录），失败则不保留。
-pg_restore --list "$tmp" >/dev/null
-mv "$tmp" "$out"
-echo "备份完成：$out（$(du -h "$out" | cut -f1)）"
+pg_restore --list "${tmp}" >/dev/null
+mv "${tmp}" "${out}"
+size="$(du -h "${out}" | cut -f1)"
+echo "备份完成：${out}（${size}）"
 
-find "$dir" -maxdepth 1 -name 'isp-control-*.dump' -type f -mtime "+$keep" -print -delete
+find "${dir}" -maxdepth 1 -name 'isp-control-*.dump' -type f -mtime "+${keep}" -print -delete
