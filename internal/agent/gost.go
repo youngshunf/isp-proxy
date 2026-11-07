@@ -75,7 +75,10 @@ func (globalAuther) Authenticate(ctx context.Context, user, password string, opt
 	if c == nil || c.sub == nil || c.sub.id != id {
 		return "", false
 	}
-	c.markAuthed()
+	// 并发连接已满时同样以认证失败明确拒绝（HTTP 407、SOCKS5 认证失败），不挂起。
+	if !c.markAuthed() {
+		return "", false
+	}
 	return id, true
 }
 

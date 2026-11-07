@@ -21,6 +21,10 @@ type SubState struct {
 	ExpiresAt     time.Time
 	Enabled       bool   // 管理意图、账号、生命周期等汇总后的结果
 	UsedFloor     uint64 // 控制面最后确认的累计已用量；节点取较大值
+
+	// 套餐限制（A-W3），0 表示不限。
+	MaxConns     int   // 同时在线的已认证连接数上限；超出的新连接在认证阶段被拒绝
+	BandwidthBps int64 // 带宽上限（字节/秒），上行与下行各自一份、各自等于该值，由订阅全部连接共享
 }
 
 // sub 是节点内的订阅运行态。对象一经创建不再替换，连接会持有它。
@@ -31,6 +35,10 @@ type sub struct {
 	used      atomic.Uint64
 	expiresAt atomic.Int64 // UTC 纳秒
 	enabled   atomic.Bool
+
+	maxConns atomic.Int64 // 0 表示不限
+	active   atomic.Int64 // 已认证且未关闭的连接数
+	up, down bucket       // 上行（读客户端）与下行（写客户端）带宽
 
 	// 以下字段受 Agent.mu 保护。
 	timer  *time.Timer
@@ -154,6 +162,9 @@ func (a *Agent) Upsert(st SubState) bool {
 	s.expiresAt.Store(st.ExpiresAt.UnixNano())
 	s.enabled.Store(st.Enabled)
 	raiseTo(&s.used, st.UsedFloor)
+	s.maxConns.Store(int64(max(st.MaxConns, 0)))
+	s.up.set(st.BandwidthBps)
+	s.down.set(st.BandwidthBps)
 
 	if s.timer != nil {
 		s.timer.Stop()
@@ -230,7 +241,7 @@ func (a *Agent) kick(s *sub) {
 	a.mu.Unlock()
 	a.kicks.Add(1)
 	for _, c := range victims {
-		c.Conn.Close()
+		c.abort()
 	}
 }
 
@@ -245,7 +256,7 @@ func (a *Agent) kickServices(names []string) {
 	}
 	a.mu.Unlock()
 	for _, c := range victims {
-		c.Conn.Close()
+		c.abort()
 	}
 }
 
