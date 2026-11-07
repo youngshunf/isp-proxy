@@ -1,6 +1,6 @@
 // 跨用例复用的界面操作：前台注册验证、下单，后台登录与确认收款。全部走真实界面与真实控制面。
 import { expect, type Browser, type Page } from '@playwright/test'
-import { mailCode, nextTotp, stack } from './stack'
+import { mailCode, newEmail, nextTotp, stack } from './stack'
 
 export const PASSWORD = 'e2e-password-123'
 
@@ -61,4 +61,26 @@ export async function confirmPayment(admin: Page, orderId: string) {
   await dlg.getByLabel('外部收款参考').fill(`E2E-${orderId.slice(-6)}`)
   await dlg.getByRole('button', { name: /确认收到/ }).click()
   await expect(dlg).toBeHidden()
+}
+
+/** 前台订单页（待核款时按间隔轮询）等到开通完成，进入 IP 详情，返回订阅 id。 */
+export async function openProvisionedIp(page: Page): Promise<string> {
+  // 用户切回前台的标签页（后台在另一个浏览器上下文里操作过）
+  await page.bringToFront()
+  const link = page.getByRole('link', { name: '查看这个 IP' })
+  await expect(link).toBeVisible({ timeout: 45_000 })
+  await link.click()
+  await expect(page).toHaveURL(/\/ips\/[^/]+$/)
+  await expect(page.getByLabel('套餐余量').getByText('可用', { exact: true })).toBeVisible({ timeout: 45_000 })
+  return page.url().split('/').pop()!
+}
+
+/** 新用户 + 一个已开通的 IP：注册验证、下单、后台确认收款，停在 IP 详情。 */
+export async function provisionedUser(page: Page, admin: Page, tag: string, region = '美国 洛杉矶') {
+  const email = newEmail(tag)
+  await registerAndVerify(page, email)
+  const orderId = await buyNew(page, region)
+  await confirmPayment(admin, orderId)
+  const subId = await openProvisionedIp(page)
+  return { email, subId }
 }

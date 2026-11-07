@@ -9,6 +9,15 @@ test('主流程：从注册到换出口', async ({ page, browser }) => {
   const st = stack()
   const email = newEmail('main')
   const exitByIp = new Map(st.exits.map((e) => [e.ip, e]))
+  // 前台全程不应有控制台错误、未捕获异常或失败的接口请求。
+  // 例外：未登录时的会话检查 GET /api/me 按契约返回 401（浏览器会把它记成一条资源加载错误）。
+  const problems: string[] = []
+  page.on('console', (m) => m.type() === 'error' && !m.text().startsWith('Failed to load resource') && problems.push(m.text()))
+  page.on('pageerror', (e) => problems.push(e.message))
+  page.on('response', (r) => {
+    const path = new URL(r.url()).pathname
+    if (path.startsWith('/api/') && r.status() >= 400 && !(r.status() === 401 && path === '/api/me')) problems.push(`${r.status()} ${r.request().method()} ${path}`)
+  })
 
   await test.step('注册并用邮件验证码验证（验证即登录）', async () => {
     await registerAndVerify(page, email)
@@ -114,8 +123,8 @@ test('主流程：从注册到换出口', async ({ page, browser }) => {
   })
 
   await test.step('前台看到新出口，经同一接入到达新出口', async () => {
+    // 不刷新：有进行中的换出口申请时详情页按间隔轮询
     await page.bringToFront()
-    await page.reload()
     await expect(page.getByText(firstExit.exit.ip, { exact: true })).toHaveCount(0, { timeout: 30_000 })
     const ip = (await page.getByText(/^203\.0\.113\.\d+$/).first().textContent())!.trim()
     expect(ip).toBe(spare.ip)
@@ -125,4 +134,6 @@ test('主流程：从注册到换出口', async ({ page, browser }) => {
     await expect(req).toContainText('已更换')
     await expect(req).toContainText(spare.ip)
   })
+
+  expect(problems, '前台控制台错误').toEqual([])
 })
