@@ -120,3 +120,8 @@ all-arch: $(PLATFORM_LIST) $(WINDOWS_ARCH_LIST)
 releases: $(gz_releases) $(zip_releases)
 clean:
 	rm $(BINDIR)/*
+
+# 平台 E2E（docs/05 §7.1）：本机回环，需要本机 PostgreSQL（initdb/pg_ctl）。
+.PHONY: isp-e2e
+isp-e2e:
+	go test -tags ispe2e ./tests/isp/... -count=1
