@@ -449,10 +449,14 @@ func TestA18_WrongPasswordAndJunkNotMetered(t *testing.T) {
 		if leak := containsAny(string(b), wrongPass, c.Pass); leak != "" {
 			t.Fatalf("%s 泄露了密码 %q", filepath.Base(f), leak)
 		}
-		if strings.Contains(string(b), junkMark) {
-			// GOST 的 http 处理器把畸形请求行原样写进错误日志（malformed HTTP request "…"）。
-			t.Errorf("ISSUE: %s 记录了客户发送的原始数据（%s）：GOST http 处理器的 malformed HTTP request 日志带请求行内容", filepath.Base(f), junkMark)
+		if i := strings.Index(string(b), junkMark); i >= 0 {
+			// GOST 处理器会把畸形请求行原样写进错误日志；agent 服务走脱敏日志器 isp-redact（internal/agent/redact.go）。
+			t.Fatalf("%s 记录了客户发送的原始数据：…%s…", filepath.Base(f), truncate(string(b[max(0, i-200):]), 300))
 		}
+	}
+	// 脱敏不是靠“不记日志”：畸形请求仍有错误日志，只是内容换成了长度与摘要。
+	if b, _ := os.ReadFile(e.Gost.logPath); !strings.Contains(string(b), "malformed HTTP request") || !strings.Contains(string(b), "已脱敏") {
+		t.Fatal("gost.log 应保留畸形请求的诊断（脱敏后）")
 	}
 }
 
@@ -481,8 +485,7 @@ func TestA22_RestoreOlderBackupKeepsMaxUsage(t *testing.T) {
 	cmd := exec.Command("bash", filepath.Join(root, "deploy", "backup.sh"), backups)
 	cmd.Env = append(os.Environ(), "ISP_DATABASE_URL="+e.DBURL)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		// 已知问题：脚本在 mv 之后打印结果时出错（见报告），备份文件本身已生成；记为失败但继续验证恢复。
-		t.Errorf("ISSUE: deploy/backup.sh 退出码非 0：%v\n%s", err, out)
+		t.Fatalf("deploy/backup.sh 退出码非 0：%v\n%s", err, out)
 	}
 	dumps, _ := filepath.Glob(filepath.Join(backups, "isp-control-*.dump"))
 	if len(dumps) != 1 {

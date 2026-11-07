@@ -48,6 +48,7 @@ func Install(a *Agent, tlsCfg *tls.Config) {
 		registry.ListenerRegistry().Register(ListenerTCP, trackingFactory("tcp"))
 		registry.ListenerRegistry().Register(ListenerTLS, trackingFactory("tls"))
 		registry.AutherRegistry().Register(AutherName, globalAuther{})
+		registry.LoggerRegistry().Register(LoggerName, newRedactLogger(nil))
 	})
 }
 
@@ -392,7 +393,8 @@ func (a *Agent) ReplaceAccess(subID string, acc Access, exit *Exit) error {
 //
 // 处理器的扩展能力一律显式关闭（docs/04 §2）：SOCKS5 的 UDP 中继与 BIND、HTTP 的 UDP over HTTP
 // 走独立套接字或反向监听，不经连接表，开启即绕过计量与出站封禁；Tor 扩展命令同样关闭；
-// SOCKS5 不协商 GOST 的 TLS 扩展方法（notls）。TestAccessServiceConfigsDisableBypasses 断言这些取值。
+// SOCKS5 不协商 GOST 的 TLS 扩展方法（notls）。服务日志一律走脱敏日志器 isp-redact（redact.go）。
+// TestAccessServiceConfigsDisableBypasses 断言这些取值。
 func accessServiceConfigs(names []string, acc Access, chainName string) []*config.ServiceConfig {
 	specs := []struct {
 		name, addr, ln, h string
@@ -407,6 +409,7 @@ func accessServiceConfigs(names []string, acc Access, chainName string) []*confi
 		out = append(out, &config.ServiceConfig{
 			Name:     sp.name,
 			Addr:     sp.addr,
+			Logger:   LoggerName,
 			Listener: &config.ListenerConfig{Type: sp.ln},
 			Handler: &config.HandlerConfig{
 				Type:     sp.h,

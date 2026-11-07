@@ -33,6 +33,9 @@ func TestAccessServiceConfigsDisableBypasses(t *testing.T) {
 		if c.Handler.Auther != AutherName || c.Handler.Chain != "exit-s1-a3" || c.Handler.Auth != nil || len(c.Handler.Authers) != 0 {
 			t.Fatalf("%s: auther %q chain %q", c.Name, c.Handler.Auther, c.Handler.Chain)
 		}
+		if c.Logger != LoggerName || len(c.Loggers) != 0 {
+			t.Fatalf("%s: logger must be %s (redacting), got %q %v", c.Name, LoggerName, c.Logger, c.Loggers)
+		}
 		if c.Listener.Auther != "" || c.Listener.Chain != "" {
 			t.Fatalf("%s: listener must not carry auther/chain", c.Name)
 		}
