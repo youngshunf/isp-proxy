@@ -3,8 +3,8 @@ package main
 import (
 	"bytes"
 	"errors"
-	"io"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"strings"
