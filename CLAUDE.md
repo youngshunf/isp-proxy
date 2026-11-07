@@ -27,7 +27,7 @@ make all
 | `cmd/gost/register.go` | Blank imports for all built-in handlers, listeners, dialers, connectors — triggers `init()` registration |
 | `cmd/gost/version.go` | Version resolution: ldflags injection → `buildVersionFallback` + short VCS commit → module build info → bare `buildVersionFallback` |
 | `web/` | pnpm 工作区：`apps/portal` 用户前台原型、`apps/admin` 管理后台原型（React 19 + antd 6 + TanStack Query + React Router Data 模式，内存模拟数据；后台趋势图用按需加载的 ECharts），`packages/api-client` 契约类型、管理端 `AdminApi`（fetch 客户端 + `createMockAdminApi`）与用户端 mock，`packages/ui` 两端共用的 token、主题、格式化与部件。视觉规范见 `DESIGN.md`；转正步骤见 `docs/05-施工文档.md` §6 |
-| `internal/agent/` | ISP 平台节点 agent 数据面：按订阅计量（`meter.go`）、连接表与 GOST 组件注册、失败即拒绝的出口链（`gost.go`）、订阅状态与持久化（`agent.go`、`store.go`）。设计见 `docs/04-计量与执行方案.md` |
+| `internal/agent/` | ISP 平台节点 agent 数据面：按订阅计量（`meter.go`）、连接表与 GOST 组件注册、失败即拒绝的出口链（`gost.go`）、订阅状态与持久化（`agent.go`、`store.go`）、接入服务使用的脱敏日志器 `isp-redact`（`redact.go`，客户请求原文与认证明文不进 gost.log）。设计见 `docs/04-计量与执行方案.md` |
 | `internal/agent/node/` | 节点运行时：读 agent 配置（`deploy/agent.example.yaml`），mTLS 连控制面按期望状态对账、上报、探测，落盘最后已应用状态（`desired.json`，0600，含凭据）。由 `gost -agent-config <file>` 启动；该模式不开放 GOST 原生 API、禁止重载（重载会清空 `isp-auth` 与出口链并导致直连，见 docs/04 §2） |
 | `tests/isp/` | 平台 E2E（build tag `ispe2e`）：每个 docs/02 场景一个测试；环境 `env_test.go`、类型化客户端 `client_test.go`/`admin_test.go`/`user_test.go`、四种接入 `proxy_test.go`、业务流程 `flows_test.go`。见 docs/05 §7.1 |
 | `internal/agent/agenttest/` | 测试辅助：伪控制面（`agentproto.NewHandler` + 开发证书）、伪 ISP 上游（http/https/socks5）、三种协议客户端 |

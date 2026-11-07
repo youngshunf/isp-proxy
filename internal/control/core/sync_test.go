@@ -487,6 +487,7 @@ func TestA36_ExitRequests(t *testing.T) {
 	x.ok(x.do(x.asAdmin(), "POST", "/admin-api/subscriptions/"+sub+"/exit-changes", map[string]any{"resourceId": res, "compareProbeId": probe,
 		"exitRequestId": first, "reason": "客户申请"}, x.key()), 200, nil)
 	x.apply(x.node)
+	x.answerProbes(x.node, x.probeIP) // 切换后检测通过
 	var done struct {
 		Status string  `json:"status"`
 		NewIP  *string `json:"newIp"`

@@ -565,16 +565,15 @@ func TestA42_CombinedChangeAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	tk = e.Admin.WaitTask(tk.ID)
-	if tk.State == "succeeded" {
-		as := e.WaitApplied(s.ID)
-		_, rerr := e.Reach(Connect, CredsOf(u.Sub(s.ID).Access))
-		t.Errorf("ISSUE: 候选上游在比较通过后故障，组合更换任务仍报告成功（任务 %s，出口 %s，新接入访问结果 %v）；"+
-			"R-11.6 期望任一步失败整体回到原状态。任务只校验先前的比较探测，节点应用后未对新绑定做出口检测即判成功",
-			tk.ID, as.Exit.ResourceID, rerr)
-		// 换到可用出口，继续后续断言。
-		e.Admin.ChangeExit(s.ID, e.FreeExit(e.Exits[2].ResourceID).ResourceID, false)
-	} else {
-		mustUnchanged("候选故障", res0, acc0)
+	// 节点应用后经新绑定做切换后检测（R-11.6）：检测失败则整体回到原接入与原出口，候选隔离。
+	if tk.State != "failed" || deref(tk.FailureCode) != "exit_check_failed" {
+		t.Fatalf("候选上游在比较通过后故障，组合更换应因切换后检测失败而失败：%+v %s %s",
+			tk, deref(tk.FailureCode), deref(tk.FailureReason))
+	}
+	t.Logf("失败码：%s %s", deref(tk.FailureCode), deref(tk.FailureReason))
+	mustUnchanged("候选故障", res0, acc0)
+	if st := e.Admin.Upstream(cand.ResourceID).Status; st != "quarantine" {
+		t.Fatalf("切换后检测失败的候选资源应隔离：%s", st)
 	}
 
 	section(t, "成功的组合更换")
@@ -585,7 +584,8 @@ func TestA42_CombinedChangeAtomic(t *testing.T) {
 	e.mustClose(idle, "组合更换")
 	as := e.WaitApplied(s.ID)
 	acc := *u.Sub(s.ID).Access
-	if as.Exit.ResourceID != cand.ResourceID || acc.Version != acc0.Version+1 || acc.Ports == acc0.Ports {
+	// 失败的尝试也占用接入版本号，只要求版本更新。
+	if as.Exit.ResourceID != cand.ResourceID || acc.Version <= acc0.Version || acc.Ports == acc0.Ports {
 		t.Fatalf("组合更换后：出口 %s 接入 %+v", as.Exit.ResourceID, acc)
 	}
 	e.MustReach(CredsOf(&acc), cand.Label)

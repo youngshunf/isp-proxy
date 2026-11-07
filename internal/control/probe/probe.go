@@ -65,6 +65,16 @@ func (s *Service) CreateExitCheck(ctx context.Context, tx *kernel.Tx, sub string
 	return s.insert(ctx, tx, *node, agentproto.ProbeExitCheck, &sub, &res, binding, admin)
 }
 
+// CreateBindingCheck 下发经指定绑定（尚未生效的新出口）的出口检测：换出口任务在节点应用后据此判定成败（R-11.6）。
+func (s *Service) CreateBindingCheck(ctx context.Context, tx *kernel.Tx, sub, binding string) (string, error) {
+	var node, res string
+	if err := tx.QueryRow(ctx, `SELECT s.node_id, b.resource_id FROM exit_bindings b JOIN subscriptions s ON s.id = b.subscription_id
+	                             WHERE b.id = $1 AND s.id = $2 AND s.node_id IS NOT NULL`, binding, sub).Scan(&node, &res); err != nil {
+		return "", err
+	}
+	return s.insert(ctx, tx, node, agentproto.ProbeExitCheck, &sub, &res, &binding, nil)
+}
+
 // CreateCandidateCompare 下发候选资源验证并与当前出口比较（换出口第二、三步）。
 func (s *Service) CreateCandidateCompare(ctx context.Context, tx *kernel.Tx, sub, res string, admin *string) (string, error) {
 	var node *string

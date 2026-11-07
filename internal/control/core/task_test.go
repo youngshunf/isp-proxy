@@ -213,6 +213,7 @@ func TestA42_CombinedChangeAtomicWithRollback(t *testing.T) {
 	p, _ = x.compare(sub, res2, newIP)
 	x.ok(x.exitChange(sub, res2, p, true), 200, &task)
 	x.apply(x.node)
+	x.answerProbes(x.node, x.probeIP) // 切换后检测通过（失败见 verify_test.go）
 	v := x.wantBlockers(u, sub)
 	if v.Exit.IP != newIP || v.Access.Version == before.Access.Version {
 		t.Fatalf("%+v", v)
@@ -227,8 +228,10 @@ func TestA42_CombinedChangeAtomicWithRollback(t *testing.T) {
 	if x.int(`SELECT count(*) FROM alerts WHERE kind = 'exit_change_failed' AND status = 'open'`) != 0 {
 		t.Fatal("成功后告警应关闭")
 	}
-	if x.int(`SELECT count(*) FROM probes WHERE kind = 'exit_check' AND subscription_id = $1 AND status = 'queued'`, sub) == 0 {
-		t.Fatal("换出口成功后应检测新出口")
+	// 成功前已经经新出口检测过（切换后检测），新绑定带检测结果。
+	if x.int(`SELECT count(*) FROM probes p JOIN subscriptions s ON s.current_exit_id = p.exit_binding_id
+	           WHERE p.kind = 'exit_check' AND s.id = $1 AND p.status = 'done' AND p.result = 'ok'`, sub) == 0 {
+		t.Fatal("换出口成功前应已检测新出口")
 	}
 }
 
@@ -291,6 +294,7 @@ func TestA43_ChangesAllowedWhenExhaustedOrRetained(t *testing.T) {
 	p, _ := x.compare(sub, res, x.nextIP("us"))
 	x.ok(x.exitChange(sub, res, p, false), 200, nil)
 	x.apply(x.node)
+	x.answerProbes(x.node, x.probeIP)
 	x.wantBlockers(u, sub, "traffic_exhausted")
 	x.clk.Set(x.expires(sub).Add(time.Second))
 	x.tick()
