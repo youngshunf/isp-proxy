@@ -26,7 +26,7 @@ make all
 | `cmd/gost/program.go` | Service lifecycle (`Init`/`Start`/`Stop`), config loading, API/metrics/profiling servers, SIGHUP reload |
 | `cmd/gost/register.go` | Blank imports for all built-in handlers, listeners, dialers, connectors — triggers `init()` registration |
 | `cmd/gost/version.go` | Version resolution: ldflags injection → `buildVersionFallback` + short VCS commit → module build info → bare `buildVersionFallback` |
-| `web/` | pnpm 工作区：`apps/portal` 用户前台原型（React 19 + antd 6 + TanStack Query + React Router Data 模式，内存模拟数据），`packages/api-client` 契约类型与 mock。视觉规范见 `DESIGN.md`；转正步骤见 `docs/05-施工文档.md` §6 |
+| `web/` | pnpm 工作区：`apps/portal` 用户前台原型、`apps/admin` 管理后台原型（React 19 + antd 6 + TanStack Query + React Router Data 模式，内存模拟数据；后台趋势图用按需加载的 ECharts），`packages/api-client` 契约类型、管理端 `AdminApi`（fetch 客户端 + `createMockAdminApi`）与用户端 mock，`packages/ui` 两端共用的 token、主题、格式化与部件。视觉规范见 `DESIGN.md`；转正步骤见 `docs/05-施工文档.md` §6 |
 | `internal/agent/` | ISP 平台节点 agent 数据面：按订阅计量（`meter.go`）、连接表与 GOST 组件注册、失败即拒绝的出口链（`gost.go`）、订阅状态与持久化（`agent.go`、`store.go`）。设计见 `docs/04-计量与执行方案.md` |
 | `internal/agent/node/` | 节点运行时：读 agent 配置（`deploy/agent.example.yaml`），mTLS 连控制面按期望状态对账、上报、探测，落盘最后已应用状态（`desired.json`，0600，含凭据）。由 `gost -agent-config <file>` 启动；该模式不开放 GOST 原生 API、禁止重载（重载会清空 `isp-auth` 与出口链并导致直连，见 docs/04 §2） |
 | `internal/agent/agenttest/` | 测试辅助：伪控制面（`agentproto.NewHandler` + 开发证书）、伪 ISP 上游（http/https/socks5）、三种协议客户端 |
@@ -82,4 +82,4 @@ E2E tests are in `tests/e2e/` — integration tests using the built binary. Run 
 
 Control plane: `go test ./internal/control/... ./cmd/isp-control/...` — DB tests use a throwaway PostgreSQL from `pgtest` (local `initdb`/`pg_ctl`, or `ISP_TEST_DATABASE_URL`; skipped with a reason if neither exists, set `ISP_TEST_REQUIRE_DB=1` to fail instead). HTTP tests run against the real router (`internal/control/api`); mail goes to a file-drop dir, never real SMTP.
 
-`web/` tests: `cd web && corepack pnpm@10.28.1 -r typecheck && corepack pnpm@10.28.1 -r test` (Vitest + Testing Library; mock API only). Dev server: `corepack pnpm@10.28.1 dev:portal` → http://127.0.0.1:5173. Installing packages needs network access.
+`web/` tests: `cd web && corepack pnpm@10.28.1 -r typecheck && corepack pnpm@10.28.1 -r test` (Vitest + Testing Library; mock API only). Dev servers: `corepack pnpm@10.28.1 dev:portal` → http://127.0.0.1:5173, `corepack pnpm@10.28.1 dev:admin` → http://127.0.0.1:5174 (mock login `ops@example.com` / `admin-pass-1`, TOTP `246810`). Build: `corepack pnpm@10.28.1 -r build`. Installing packages needs network access.

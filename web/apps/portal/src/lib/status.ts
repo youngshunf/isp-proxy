@@ -9,16 +9,10 @@ import {
   type PaymentStatus,
   type Subscription,
 } from '@isp/api-client'
+import type { MarkShape, StateView, Tone } from '@isp/ui'
 import { fmtDay } from './format'
 
-export type Tone = 'ok' | 'warn' | 'stop' | 'wait'
-export type MarkShape = 'filled' | 'hollow' | 'half'
-
-export interface StateView {
-  label: string
-  tone: Tone
-  shape: MarkShape
-}
+export type { MarkShape, StateView, Tone }
 
 const BLOCKER_STATE: Record<Blocker, StateView> = {
   account_banned: { label: '账号已封禁', tone: 'stop', shape: 'hollow' },

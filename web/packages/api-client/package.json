@@ -5,7 +5,10 @@
   "exports": {
     ".": "./src/index.ts",
     "./generated": "./src/generated/schema.ts",
-    "./mock": "./src/mock/index.ts"
+    "./mock": "./src/mock/index.ts",
+    "./http": "./src/http.ts",
+    "./admin": "./src/admin/index.ts",
+    "./admin/mock": "./src/admin/mock/index.ts"
   },
   "scripts": {
     "gen": "openapi-typescript ../../../api/openapi.yaml -o src/generated/schema.ts",

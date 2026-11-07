@@ -11,13 +11,10 @@
   },
   "dependencies": {
     "@ant-design/icons": "6.3.4",
-    "@fontsource/barlow": "5.3.0",
-    "@fontsource/red-hat-mono": "5.3.0",
     "@isp/api-client": "workspace:*",
+    "@isp/ui": "workspace:*",
     "@tanstack/react-query": "5.107.1",
     "antd": "6.7.0",
-    "dayjs": "1.11.23",
-    "flag-icons": "7.5.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-router": "8.5.1"

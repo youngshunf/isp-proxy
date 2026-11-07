@@ -207,9 +207,11 @@ export interface Account {
   createdAt: string
 }
 
+/** 错误码，与 OpenAPI ErrorCode 完全一致（forbidden：CSRF 校验失败或管理端权限不足）。 */
 export type ApiErrorCode =
   | 'unauthorized'
   | 'unverified'
+  | 'forbidden'
   | 'rate_limited'
   | 'conflict'
   | 'quota_exhausted'
@@ -217,13 +219,46 @@ export type ApiErrorCode =
   | 'invalid'
   | 'precondition'
 
+/** 服务端给出的可选恢复动作，例如“去续时长”。 */
+export interface ApiErrorAction {
+  label: string
+  href: string
+}
+
 export class ApiError extends Error {
   readonly code: ApiErrorCode
-  constructor(code: ApiErrorCode, message: string) {
+  readonly action: ApiErrorAction | null
+  /** HTTP 状态；mock 抛出时按错误码推断。 */
+  readonly status: number
+  /** rate_limited 时的 Retry-After 秒数。 */
+  readonly retryAfter: number | null
+  /** 409 冲突时服务端附带的现有对象（如换出口申请的 existing）。 */
+  readonly details: Record<string, unknown> | null
+  constructor(
+    code: ApiErrorCode,
+    message: string,
+    extra: { action?: ApiErrorAction | null; status?: number; retryAfter?: number | null; details?: Record<string, unknown> | null } = {},
+  ) {
     super(message)
     this.code = code
     this.name = 'ApiError'
+    this.action = extra.action ?? null
+    this.status = extra.status ?? STATUS_OF[code]
+    this.retryAfter = extra.retryAfter ?? null
+    this.details = extra.details ?? null
   }
+}
+
+export const STATUS_OF: Record<ApiErrorCode, number> = {
+  unauthorized: 401,
+  unverified: 403,
+  forbidden: 403,
+  not_found: 404,
+  conflict: 409,
+  precondition: 412,
+  invalid: 422,
+  quota_exhausted: 429,
+  rate_limited: 429,
 }
 
 export interface PortalApi {

@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { api, errorText, qk } from '../app/api'
 import { Brand, ProtoRibbon } from '../app/Shell'
-import { Plate } from '../components/Plate'
+import { Plate } from '@isp/ui'
 
 function AuthFrame({ title, sub, children }: { title: string; sub?: ReactNode; children: ReactNode }) {
   return (
