@@ -24,6 +24,8 @@ func TestProbeExit(t *testing.T) {
 	up := startUpstream(t, echo.addr, "cu", "cp")
 	good := Exit{Version: 9, Protocol: "http", Addr: up.addr, Username: "cu", Password: "cp"}
 
+	// 等客户连接在代理侧完全关闭，用量不再变化，再比较检测前后。
+	eventually(t, time.Second, func() bool { return e.a.ConnCount("s1") == 0 }, "customer connection not closed")
 	used, kicks, conns := e.a.Used("s1"), e.a.Kicks(), e.a.ConnCount("s1")
 	res, err := ProbeExit(context.Background(), good, echoURL)
 	if err != nil || res.Class != ReasonOK || res.IP != "198.51.100.7" || res.Latency <= 0 {
