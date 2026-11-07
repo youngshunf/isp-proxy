@@ -12,52 +12,7 @@ import (
 // notYetImplemented 是契约中已定义、但实现尚未接入的路由（全部属于 ctl-core：订阅、订单、目录、换出口申请、
 // 上游库存、套餐与规则、节点与告警、概览）。接入一个就删一个；控制面完成时必须为空
 // （设置 ISP_REQUIRE_COMPLETE_API=1 时 TestContractComplete 强制检查）。
-var notYetImplemented = map[string]bool{
-	"GET /admin-api/exit-requests":                                  true,
-	"GET /admin-api/exit-requests/{exitRequestId}":                  true,
-	"GET /admin-api/orders":                                         true,
-	"GET /admin-api/orders/{orderId}":                               true,
-	"GET /admin-api/overview":                                       true,
-	"GET /admin-api/refunds":                                        true,
-	"GET /admin-api/subscriptions":                                  true,
-	"GET /admin-api/subscriptions/{subscriptionId}":                 true,
-	"GET /admin-api/subscriptions/{subscriptionId}/access-versions": true,
-	"GET /admin-api/subscriptions/{subscriptionId}/events":          true,
-	"GET /admin-api/subscriptions/{subscriptionId}/exit-bindings":   true,
-	"GET /admin-api/subscriptions/{subscriptionId}/ledger":          true,
-	"GET /admin-api/subscriptions/{subscriptionId}/usage":           true,
-	"GET /api/exit-requests":                                        true,
-	"GET /api/orders":                                               true,
-	"GET /api/orders/{orderId}":                                     true,
-	"GET /api/subscriptions":                                        true,
-	"GET /api/subscriptions/{subscriptionId}":                       true,
-	"GET /api/subscriptions/{subscriptionId}/events":                true,
-	"PATCH /admin-api/exit-requests/{exitRequestId}":                true,
-	"PATCH /admin-api/subscriptions/{subscriptionId}":               true,
-	"PATCH /api/subscriptions/{subscriptionId}":                     true,
-	"POST /admin-api/exit-requests/{exitRequestId}/accept":          true,
-	"POST /admin-api/exit-requests/{exitRequestId}/complete":        true,
-	"POST /admin-api/exit-requests/{exitRequestId}/reject":          true,
-	"POST /admin-api/orders":                                        true,
-	"POST /admin-api/orders/{orderId}/cancel":                       true,
-	"POST /admin-api/orders/{orderId}/fulfillment-retry":            true,
-	"POST /admin-api/orders/{orderId}/payment-confirmation":         true,
-	"POST /admin-api/orders/{orderId}/refunds":                      true,
-	"POST /admin-api/refunds/{refundId}/decision":                   true,
-	"POST /admin-api/subscriptions":                                 true,
-	"POST /admin-api/subscriptions/{subscriptionId}/access/reveal":  true,
-	"POST /admin-api/subscriptions/{subscriptionId}/deletion":       true,
-	"POST /admin-api/subscriptions/{subscriptionId}/ledger-entries": true,
-	"POST /admin-api/subscriptions/{subscriptionId}/pause":          true,
-	"POST /admin-api/subscriptions/{subscriptionId}/resume":         true,
-	"POST /admin-api/transfers":                                     true,
-	"POST /api/exit-requests":                                       true,
-	"POST /api/orders":                                              true,
-	"POST /api/orders/{orderId}/cancel":                             true,
-	"POST /api/orders/{orderId}/claim-paid":                         true,
-	"POST /api/subscriptions/{subscriptionId}/access-changes":       true,
-	"POST /api/subscriptions/{subscriptionId}/access/ack":           true,
-}
+var notYetImplemented = map[string]bool{}
 
 // TestContractRoutes 断言：已注册路由 ∪ 暂缺清单 = OpenAPI 操作集合，且两者不相交、暂缺清单里没有契约外的路由。
 func TestContractRoutes(t *testing.T) {

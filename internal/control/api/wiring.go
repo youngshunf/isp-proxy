@@ -9,16 +9,11 @@ import (
 
 	"github.com/go-gost/gost/internal/agentproto"
 	"github.com/go-gost/gost/internal/control/admin"
-	"github.com/go-gost/gost/internal/control/alert"
 	"github.com/go-gost/gost/internal/control/audit"
-	"github.com/go-gost/gost/internal/control/catalog"
+	"github.com/go-gost/gost/internal/control/core"
 	"github.com/go-gost/gost/internal/control/httpx"
-	"github.com/go-gost/gost/internal/control/inventory"
-	"github.com/go-gost/gost/internal/control/kernel"
 	"github.com/go-gost/gost/internal/control/mail"
-	"github.com/go-gost/gost/internal/control/probe"
 	"github.com/go-gost/gost/internal/control/secret"
-	"github.com/go-gost/gost/internal/control/task"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -32,27 +27,27 @@ type coreParts struct {
 	background []func(ctx context.Context)
 }
 
-// wireCore 构造 ctl-core 的业务包。这是接入 ctl-core 的唯一位置。
-//
-// 已接入：目录与规则（catalog）、库存与节点（inventory）、出口检测（probe）、变更任务（task）、告警（alert）。
-//
-// TODO(ctl-core)：以下包合入后在这里接上，并从 contract_test.go 的 notYetImplemented 中删去对应路由：
-//   - 订阅（用户端与管理端订阅路由）、订单与收款、换出口申请、权益划转、运营概览；
-//   - adminHooks.UserStatusChanged 接订阅包“用户状态变化 → 该用户全部订阅生成新期望版本”（封禁 ≤1 秒断开，R-13.8）；
-//     adminHooks.UserSubscriptions / UserRecentOrders 接用户详情页的订阅与订单列表；
-//   - agent 接节点同步包的 agentproto.Server 实现（hub 已是 kernel.Env.Hub）；
-//   - background 接调度循环（docs/06 §3，每 5 秒）。
+// wireCore 构造 ctl-core 的业务内核（internal/control/core）。这是接入 ctl-core 的唯一位置：
+// 全部业务路由组、节点接口（agentproto.Server）、节点唤醒器、调度循环与 admin.Hooks（封禁/解封让该用户全部订阅
+// 生成新期望版本，节点 ≤1 秒断开存量连接，R-13.8）。
 func wireCore(d *Deps) (coreParts, error) {
-	env, err := kernel.NewEnv(d.Pool, kernel.Config{Box: d.Box}, nowClock(d.Now), mailer{box: d.Box, kick: d.Mail}, auditor{}, d.Logger)
+	cfg := d.Core
+	cfg.Box = d.Box
+	c, err := core.New(d.Pool, cfg, nowClock(d.Now), mailer{box: d.Box, kick: d.Mail}, auditor{}, d.Logger)
 	if err != nil {
 		return coreParts{}, err
 	}
-	probes := probe.New(env)
-	inv := inventory.New(env)
+	var domains []Domain
+	for _, dom := range c.Domains() {
+		domains = append(domains, dom)
+	}
 	return coreParts{
-		domains: []Domain{catalog.New(env), RoutesFunc(inv.UpstreamRoutes), RoutesFunc(inv.NodeRoutes), probes,
-			task.New(env, probes), alert.New(env)},
-		hub: env.Hub,
+		domains: domains,
+		adminHooks: admin.Hooks{UserStatusChanged: c.UserStatusChanged, UserSubscriptions: c.UserSubscriptions,
+			UserRecentOrders: c.UserRecentOrders},
+		agent:      c.AgentServer(),
+		hub:        c.Hub(),
+		background: []func(ctx context.Context){c.RunScheduler},
 	}, nil
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/go-gost/gost/internal/agentproto"
 	"github.com/go-gost/gost/internal/control/api"
 	"github.com/go-gost/gost/internal/control/httpx"
+	"github.com/go-gost/gost/internal/control/kernel"
 	"github.com/go-gost/gost/internal/control/mail"
 	"github.com/go-gost/gost/internal/control/ratelimit"
 	"github.com/go-gost/gost/internal/control/secret"
@@ -130,7 +131,8 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer, hooks *serve
 		Brand: mail.Brand{Name: cfg.Mail.Brand, SiteURL: cfg.Mail.SiteURL}, Logger: log}
 	worker.Init()
 	plat, err := api.Assemble(api.Deps{Pool: pool, Box: box, Cookies: session.Cookies{Secure: cfg.SecureCookies},
-		Mail: worker, Issuer: cfg.TOTPIssuer, Logger: log})
+		Mail: worker, Issuer: cfg.TOTPIssuer, Logger: log,
+		Core: kernel.Config{EchoURL: cfg.Core.EchoURL, Geo: kernel.StaticGeo(cfg.Core.ExitCountries)}})
 	if err != nil {
 		return err
 	}

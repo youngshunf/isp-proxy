@@ -12,6 +12,7 @@ import (
 	"github.com/go-gost/gost/internal/control/account"
 	"github.com/go-gost/gost/internal/control/admin"
 	"github.com/go-gost/gost/internal/control/httpx"
+	"github.com/go-gost/gost/internal/control/kernel"
 	"github.com/go-gost/gost/internal/control/secret"
 	"github.com/go-gost/gost/internal/control/session"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,6 +32,9 @@ type Deps struct {
 	Issuer  string              // TOTP 发行方名称
 	Now     func() time.Time    // 默认 time.Now
 	Logger  *slog.Logger
+
+	// Core 是业务内核配置（探测回显端点、出口国家解析、检测间隔等）；Box 取自上面的 Box，零值字段取默认值。
+	Core kernel.Config
 
 	// 可选：测试覆盖限流。
 	AccountLimits *account.Limits

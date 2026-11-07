@@ -38,6 +38,7 @@ type Config struct {
 	TOTPIssuer string `yaml:"totp_issuer"`
 
 	Agent AgentConfig `yaml:"agent"`
+	Core  CoreConfig  `yaml:"core"`
 	Mail  MailConfig  `yaml:"mail"`
 	Log   LogConfig   `yaml:"log"`
 
@@ -56,6 +57,15 @@ type AgentConfig struct {
 	KeyFile  string `yaml:"key_file"` // 也可由 ISP_AGENT_TLS_KEY_FILE 提供
 	// LongPoll 是期望状态长轮询最长等待，默认 25s。
 	LongPoll time.Duration `yaml:"long_poll"`
+}
+
+// CoreConfig 是业务内核配置。
+type CoreConfig struct {
+	// EchoURL 是节点探测使用的 IP 回显端点（经候选/当前出口访问，返回出口 IP）。
+	EchoURL string `yaml:"echo_url"`
+	// ExitCountries 是静态“出口 IP → 国家代码”映射：探测结果只带 IP，控制面据此判定国家是否符合套餐。
+	// 开发与测试用；生产应接 GeoIP 库（kernel.GeoLookup）。未列出的 IP 视为国家未知，换出口比较不通过。
+	ExitCountries map[string]string `yaml:"exit_countries"`
 }
 
 // MailConfig 是发信配置。
