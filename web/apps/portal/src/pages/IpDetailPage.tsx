@@ -235,7 +235,7 @@ export default function IpDetailPage() {
                         出口与套餐余量
                       </div>
                       <div className="sim-plan">
-                        <span className="mono">{serial(sub.id)}</span> · 时长与流量属于这个 IP，换接入、换出口都不影响
+                        <span className="mono" title={sub.id}>{serial(sub.id)}</span> · 时长与流量属于这个 IP，换接入、换出口都不影响
                       </div>
                     </div>
                   </div>
