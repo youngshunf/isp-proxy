@@ -32,7 +32,8 @@ make all
 | `internal/agent/agenttest/` | 测试辅助：伪控制面（`agentproto.NewHandler` + 开发证书）、伪 ISP 上游（http/https/socks5）、三种协议客户端 |
 | `cmd/isp-control/` | 控制面入口：`serve`（启动即迁移，`:8080` 对外 API，`:8443` 节点 mTLS）、`migrate`、`dev-certs`、`admin create`、`seed-dev`；YAML 配置 + 环境变量密钥（docs/06 §2） |
 | `internal/control/httpx/` | HTTP 公共约定：`*httpx.Error` 与错误码映射、严格 `DecodeJSON`、`Route{Method, Pattern, Auth}`、`UserFrom`/`AdminFrom`、`ClientIP` |
-| `internal/control/api/` | 组装全部业务包路由（`Assemble`，ctl-core 接入点在 `wiring.go`），统一执行 CSRF 双提交、会话校验、`VerifiedUser`/封禁只读/viewer 只读；契约测试断言路由集合 = `apispec`（暂缺清单 `notYetImplemented`） |
+| `internal/control/api/` | 组装全部业务包路由（`Assemble`，ctl-core 接入点在 `wiring.go`），统一执行 CSRF 双提交、会话校验、`VerifiedUser`/封禁只读/viewer 只读；契约测试断言路由集合 = `apispec`（暂缺清单 `notYetImplemented` 已清空，`ISP_REQUIRE_COMPLETE_API=1` 强制） |
+| `internal/control/core/` | 业务内核组装（`core.New(pool, kernel.Config, clock, mailer, auditor, logger)`）：`Domains()`/`Routes()` 路由组、`AgentServer()` 节点接口、`RunScheduler` 5 秒调度、`admin.Hooks` 三个回调；各业务包 `kernel`（环境、事务、`GeoLookup`）、`ledger`、`inventory`、`catalog`、`probe`、`task`、`alert`、`subscription`、`order`、`exitreq`、`agentsrv`、`overview`。验收用例 A-xx 在 `core/*_test.go`（pgtest） |
 | `internal/control/account/` | 用户邮箱账号（C-W10）：注册、验证、重发、登录、找回、改密、会话校验；不泄露邮箱是否注册；库内限流 |
 | `internal/control/admin/` | 管理员（C-W8）：密码 + TOTP 两步登录（首次绑定、恢复码）、管理员会话、用户管理、审计查询、`admin.Create`（CLI） |
 | `internal/control/{audit,mail,session,ratelimit,secret}/` | 审计写入（`audit.Record(ctx, tx, …)`）与查询；邮件发件箱 + SMTP/文件投递；Cookie 与 CSRF；`rate_events` 滑动窗口；AES-GCM/MAC/argon2id |
