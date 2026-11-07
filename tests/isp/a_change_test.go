@@ -145,7 +145,7 @@ func TestA12_BadCandidatesNeverSwitch(t *testing.T) {
 		{Label: "bad-auth", RegisterPassword: "wrong-password", NoVerify: true},
 		{Label: "down", Down: true},
 		{Label: "geo-ca", Geo: "ca", NoVerify: true},
-		{Label: "same-ip", IP: "203.0.113.10", NoVerify: true}, // = exit-A
+		{Label: "same-ip", IP: "203.0.113.10", NoVerify: true},  // = exit-A
 		{Label: "taken-ip", IP: "203.0.113.11", NoVerify: true}, // = exit-B（被另一订阅占用）
 	}})
 	u := e.NewUser()
