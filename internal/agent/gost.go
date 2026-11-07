@@ -129,7 +129,11 @@ type Exit struct {
 // exitChain 包装真实链。GOST 在链缺失或选不出节点时会退化为直连
 // （x v0.28.1 chain/router.go 与 chain/route.go 的 DefaultRoute），
 // 这里在这两种情况下都返回一个必然失败的路由。
+//
+// 路由入口同时执行出站策略（A-W4）：被封目标同样得到必然失败的路由，
+// 上游收不到连接，也不会退化为直连。拒绝不踢连接、不影响同订阅的其它连接。
 type exitChain struct {
+	a     *Agent // 提供出站策略；为空时使用默认策略
 	inner atomic.Pointer[chainHolder]
 }
 
@@ -142,6 +146,10 @@ func (e *exitChain) Route(ctx context.Context, network, address string, opts ...
 	h := e.inner.Load()
 	if h == nil {
 		return failRoute{}
+	}
+	// address 是路由器解析后的地址；节点未配置解析器时仍是主机名，由策略自行解析。
+	if err := e.a.egressPolicy().Check(ctx, network, address); err != nil {
+		return failRoute{err: err}
 	}
 	r := h.c.Route(ctx, network, address, opts...)
 	if r == nil || len(r.Nodes()) == 0 {
@@ -157,13 +165,21 @@ func (e *exitChain) current() Exit {
 	return Exit{}
 }
 
-type failRoute struct{}
+// failRoute 是必然失败的路由；err 为空时为 ErrNoExit。
+type failRoute struct{ err error }
 
-func (failRoute) Dial(context.Context, string, string, ...chain.DialOption) (net.Conn, error) {
-	return nil, ErrNoExit
+func (f failRoute) error() error {
+	if f.err != nil {
+		return f.err
+	}
+	return ErrNoExit
 }
-func (failRoute) Bind(context.Context, string, string, ...chain.BindOption) (net.Listener, error) {
-	return nil, ErrNoExit
+
+func (f failRoute) Dial(context.Context, string, string, ...chain.DialOption) (net.Conn, error) {
+	return nil, f.error()
+}
+func (f failRoute) Bind(context.Context, string, string, ...chain.BindOption) (net.Listener, error) {
+	return nil, f.error()
 }
 func (failRoute) Nodes() []*chain.Node { return nil }
 
@@ -238,7 +254,7 @@ func (a *Agent) ApplyAccess(subID string, acc Access, exit *Exit) error {
 	if err != nil {
 		return err
 	}
-	ec := &exitChain{}
+	ec := &exitChain{a: a}
 	ec.inner.Store(&chainHolder{c: inner, exit: e})
 	if err := registry.ChainRegistry().Register(chainName, ec); err != nil {
 		return err

@@ -37,11 +37,11 @@ func TestExitChainFailsClosed(t *testing.T) {
 		cases[name] = ec
 	}
 	for name, ec := range cases {
-		r := ec.Route(context.Background(), "tcp", "example.com:80")
+		r := ec.Route(context.Background(), "tcp", "198.51.100.1:80")
 		if r == nil || len(r.Nodes()) != 0 {
 			t.Fatalf("%s: got %T", name, r)
 		}
-		if _, err := r.Dial(context.Background(), "tcp", "example.com:80"); !errors.Is(err, ErrNoExit) {
+		if _, err := r.Dial(context.Background(), "tcp", "198.51.100.1:80"); !errors.Is(err, ErrNoExit) {
 			t.Fatalf("%s: dial err %v", name, err)
 		}
 	}

@@ -66,6 +66,7 @@ type Agent struct {
 	flushEvery time.Duration
 	persistOK  atomic.Bool
 	now        func() time.Time
+	egress     atomic.Pointer[EgressPolicy]
 
 	stopOnce sync.Once
 	stop     chan struct{}
@@ -79,6 +80,7 @@ type Options struct {
 	Store      Store         // 为空时不持久化（仅测试）
 	FlushEvery time.Duration // 持久化间隔，默认 1 秒（D-17）
 	Now        func() time.Time
+	Egress     EgressPolicy // 出站策略；零值为默认封禁（A-W4）
 }
 
 // New 创建 Agent，并从持久化存储恢复累计用量。
@@ -101,6 +103,7 @@ func New(opts Options) (*Agent, error) {
 		a.now = time.Now
 	}
 	a.persistOK.Store(true)
+	a.SetEgressPolicy(opts.Egress)
 
 	if a.store != nil {
 		used, err := a.store.Load()

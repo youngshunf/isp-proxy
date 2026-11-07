@@ -19,6 +19,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -52,7 +53,7 @@ type backend struct {
 	srv   *http.Server
 }
 
-func startBackend(t *testing.T, label string) *backend {
+func startBackend(t testing.TB, label string) *backend {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -101,7 +102,7 @@ type fakeUpstream struct {
 	accepted atomic.Int64
 }
 
-func startUpstream(t *testing.T, backendAddr, user, pass string) *fakeUpstream {
+func startUpstream(t testing.TB, backendAddr, user, pass string) *fakeUpstream {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -149,7 +150,7 @@ func (u *fakeUpstream) serve(c net.Conn) {
 
 // ---- 证书 ----
 
-func selfSignedTLS(t *testing.T) *tls.Config {
+func selfSignedTLS(t testing.TB) *tls.Config {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -173,7 +174,7 @@ func selfSignedTLS(t *testing.T) *tls.Config {
 // ---- 环境 ----
 
 type env struct {
-	t       *testing.T
+	t       testing.TB
 	a       *Agent
 	store   string
 	ts      *toggleStore
@@ -187,11 +188,11 @@ type env struct {
 	nextVer atomic.Uint64
 }
 
-func newEnv(t *testing.T, flush time.Duration) *env {
+func newEnv(t testing.TB, flush time.Duration) *env {
 	t.Helper()
 	e := &env{t: t, store: filepath.Join(t.TempDir(), "used.json")}
 	e.ts = &toggleStore{inner: FileStore{Path: e.store}}
-	a, err := New(Options{Store: e.ts, FlushEvery: flush})
+	a, err := New(Options{Store: e.ts, FlushEvery: flush, Egress: loopbackEgress})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,6 +212,10 @@ func newEnv(t *testing.T, flush time.Duration) *env {
 	return e
 }
 
+// loopbackEgress 是测试环境的出站策略：目标端点都在本机回环上，须显式放开 127.0.0.0/8。
+// 出站封禁本身的测试另行使用默认策略（egress_test.go）。
+var loopbackEgress = EgressPolicy{AllowCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}}
+
 // toggleStore 可在运行中切换为写入失败，用于模拟磁盘故障。
 type toggleStore struct {
 	inner Store
@@ -226,7 +231,7 @@ func (s *toggleStore) Save(m map[string]uint64) error {
 	return s.inner.Save(m)
 }
 
-func freeAddr(t *testing.T) string {
+func freeAddr(t testing.TB) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -260,7 +265,7 @@ func (e *env) update(st SubState) {
 	e.a.Upsert(st)
 }
 
-func waitListening(t *testing.T, addrs ...string) {
+func waitListening(t testing.TB, addrs ...string) {
 	t.Helper()
 	for _, addr := range addrs {
 		deadline := time.Now().Add(2 * time.Second)
@@ -382,20 +387,37 @@ func socks5Connect(c net.Conn, user, pass, target string) error {
 	}
 	host, portStr, _ := net.SplitHostPort(target)
 	port, _ := strconv.Atoi(portStr)
-	req := []byte{5, 1, 0, 1}
-	req = append(req, net.ParseIP(host).To4()...)
+	req := []byte{5, 1, 0}
+	switch ip := net.ParseIP(host); {
+	case ip != nil && ip.To4() != nil:
+		req = append(append(req, 1), ip.To4()...)
+	case ip != nil:
+		req = append(append(req, 4), ip.To16()...)
+	default:
+		req = append(append(req, 3, byte(len(host))), host...)
+	}
 	req = binary.BigEndian.AppendUint16(req, uint16(port))
 	if _, err := c.Write(req); err != nil {
 		return err
 	}
-	rep := make([]byte, 10)
+	rep := make([]byte, 4)
 	if _, err := io.ReadFull(c, rep); err != nil {
 		return err
 	}
 	if rep[1] != 0 {
 		return fmt.Errorf("socks5: reply %d", rep[1])
 	}
-	return nil
+	var rest int
+	switch rep[3] {
+	case 1:
+		rest = 4 + 2
+	case 4:
+		rest = 16 + 2
+	default:
+		return fmt.Errorf("socks5: reply atyp %d", rep[3])
+	}
+	_, err := io.ReadFull(c, make([]byte, rest))
+	return err
 }
 
 // get 在隧道上发一个 HTTP/1.1 请求并读完响应体，返回响应体。
@@ -438,7 +460,7 @@ func waitClosed(c net.Conn, max time.Duration) (time.Duration, bool) {
 	}
 }
 
-func eventually(t *testing.T, max time.Duration, cond func() bool, msg string) {
+func eventually(t testing.TB, max time.Duration, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(max)
 	for !cond() {
