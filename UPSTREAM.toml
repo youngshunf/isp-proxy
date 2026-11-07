@@ -1,0 +1,16 @@
+# fork 起点仅用于追溯；后续同步上游须更新该记录并验证受影响范围。
+repository = "https://github.com/go-gost/gost"
+fork_repository = "https://github.com/youngshunf/isp-proxy"
+upstream_branch = "master"
+project_branch = "main"
+tag = "v3.3.3"
+commit = "3d514c57230bfa524aa89087da5580b314f1cd36"
+license = "MIT"
+recorded_date = "2026-11-07"
+
+# 协议实现主要位于这些独立 Go module，fork CLI 仓不等于已 fork 全部实现。
+[dependencies]
+core_module = "github.com/go-gost/core"
+core_version = "v0.6.1"
+implementation_module = "github.com/go-gost/x"
+implementation_version = "v0.28.1"
