@@ -202,9 +202,9 @@ func (s *Service) ApplyResult(ctx context.Context, tx *kernel.Tx, node string, r
 		ipKey := "exit_ip_changed:" + *binding
 		if ip != nil && verified != nil && *ip != *verified {
 			if err := alert.Raise(ctx, tx, now, alert.Alert{Kind: "upstream_error", Severity: "warning", Key: ipKey,
-				Message:  fmt.Sprintf("出口 IP 与切换前验证结果不同（%s → %s），请核对平台内独占", *verified, *ip),
-				Details:  map[string]any{"verifiedIp": *verified, "checkIp": *ip},
-				Node:     &node, Sub: sub, Resource: &resID}); err != nil {
+				Message: fmt.Sprintf("出口 IP 与切换前验证结果不同（%s → %s），请核对平台内独占", *verified, *ip),
+				Details: map[string]any{"verifiedIp": *verified, "checkIp": *ip},
+				Node:    &node, Sub: sub, Resource: &resID}); err != nil {
 				return err
 			}
 		} else if ip != nil {

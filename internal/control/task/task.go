@@ -513,7 +513,7 @@ func (s *Service) ChangeExit(ctx context.Context, tx *kernel.Tx, subID string, i
 	var obsIP, obsCC *string
 	err = tx.QueryRow(ctx, `SELECT id, result, differs_from_current, unique_on_platform, country_matches, host(observed_ip), observed_country_code
 	                          FROM probes WHERE kind = 'candidate_compare' AND subscription_id = $1 AND resource_id = $2 AND status = 'done'
-	                         ORDER BY completed_at DESC, id DESC LIMIT 1`, subID, in.ResourceID).
+	                         ORDER BY completed_at DESC, created_at DESC, id DESC LIMIT 1`, subID, in.ResourceID).
 		Scan(&latest, &result, &differs, &unique, &country, &obsIP, &obsCC)
 	if kernel.IsNoRows(err) {
 		return "", httpx.Precondition("请先对该候选资源完成验证与比较")
@@ -644,36 +644,33 @@ func (s *Service) succeed(ctx context.Context, tx *kernel.Tx, r *running) error 
 	var newAccessV, oldAccessV int
 	var changeKind string
 	if r.NewAccess != nil {
-		if err := tx.QueryRow(ctx, `UPDATE access_versions SET state = 'active', activated_at = $2 WHERE id = $1 RETURNING version, change_kind`,
-			*r.NewAccess, now).Scan(&newAccessV, &changeKind); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT version, change_kind FROM access_versions WHERE id = $1`, *r.NewAccess).Scan(&newAccessV, &changeKind); err != nil {
 			return err
 		}
+		// 先下线旧版本再启用新版本：每订阅至多一个生效接入（access_versions_one_active）。
 		if curAccess != nil && *curAccess != *r.NewAccess {
 			if err := tx.QueryRow(ctx, `SELECT version FROM access_versions WHERE id = $1`, *curAccess).Scan(&oldAccessV); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE access_versions SET state = 'revoked', revoked_at = COALESCE(revoked_at, $2),
+			                            revoke_reason = COALESCE(revoke_reason, 'replaced') WHERE id = $1`, *curAccess, now); err != nil {
 				return err
 			}
 			if changeKind == "password_reset" {
 				if err := inventory.MovePorts(ctx, tx, *curAccess, *r.NewAccess); err != nil {
 					return err
 				}
-			} else {
-				if _, err := tx.Exec(ctx, `UPDATE access_versions SET state = 'revoked', revoked_at = $2, revoke_reason = 'replaced'
-				                            WHERE id = $1 AND state <> 'revoked'`, *curAccess, now); err != nil {
-					return err
-				}
-				if err := inventory.CooldownPorts(ctx, tx, *curAccess, portCool); err != nil {
-					return err
-				}
+			} else if err := inventory.CooldownPorts(ctx, tx, *curAccess, portCool); err != nil {
+				return err
 			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE access_versions SET state = 'active', activated_at = $2 WHERE id = $1`, *r.NewAccess, now); err != nil {
+			return err
 		}
 	}
 	var oldIP, newIP *string
 	if r.NewExit != nil {
-		var newRes string
-		if err := tx.QueryRow(ctx, `UPDATE exit_bindings SET state = 'active', bound_at = $2 WHERE id = $1
-		                             RETURNING resource_id, host(verified_ip)`, *r.NewExit, now).Scan(&newRes, &newIP); err != nil {
-			return err
-		}
+		// 先解除旧绑定（资源进入冷却）再启用新绑定：每订阅至多一个生效出口，每资源至多一个订阅。
 		if curExit != nil && *curExit != *r.NewExit {
 			var oldRes string
 			if err := tx.QueryRow(ctx, `UPDATE exit_bindings SET state = 'unbound', unbound_at = $2, unbound_reason = 'replaced'
@@ -684,6 +681,11 @@ func (s *Service) succeed(ctx context.Context, tx *kernel.Tx, r *running) error 
 			if err := inventory.Cooldown(ctx, tx, oldRes, resCool); err != nil {
 				return err
 			}
+		}
+		var newRes string
+		if err := tx.QueryRow(ctx, `UPDATE exit_bindings SET state = 'active', bound_at = $2 WHERE id = $1
+		                             RETURNING resource_id, host(verified_ip)`, *r.NewExit, now).Scan(&newRes, &newIP); err != nil {
+			return err
 		}
 		if err := inventory.Bind(ctx, tx, newRes, r.Sub); err != nil {
 			return err
