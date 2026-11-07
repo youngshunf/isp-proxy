@@ -50,9 +50,9 @@ type cred struct {
 type Agent struct {
 	mu       sync.Mutex
 	subs     map[string]*sub
-	users    map[string]*cred                     // 连接用户名 -> 凭据
-	services map[string]string                    // GOST service 名 -> 订阅 ID
-	conns    map[string]map[*trackedConn]struct{} // GOST service 名 -> 存量连接
+	users    map[string]*cred    // 连接用户名 -> 凭据
+	services map[string]string   // GOST service 名 -> 订阅 ID
+	conns    map[string]*connSet // GOST service 名 -> 存量连接
 
 	store      Store
 	flushEvery time.Duration
@@ -79,7 +79,7 @@ func New(opts Options) (*Agent, error) {
 		subs:       map[string]*sub{},
 		users:      map[string]*cred{},
 		services:   map[string]string{},
-		conns:      map[string]map[*trackedConn]struct{}{},
+		conns:      map[string]*connSet{},
 		store:      opts.Store,
 		flushEvery: opts.FlushEvery,
 		now:        opts.Now,
@@ -223,7 +223,7 @@ func (a *Agent) kick(s *sub) {
 		if id != s.id {
 			continue
 		}
-		for c := range a.conns[svc] {
+		for c := range a.connsLocked(svc) {
 			victims = append(victims, c)
 		}
 	}
@@ -239,7 +239,7 @@ func (a *Agent) kickServices(names []string) {
 	a.mu.Lock()
 	var victims []*trackedConn
 	for _, svc := range names {
-		for c := range a.conns[svc] {
+		for c := range a.connsLocked(svc) {
 			victims = append(victims, c)
 		}
 	}
@@ -256,7 +256,7 @@ func (a *Agent) ConnCount(id string) int {
 	n := 0
 	for svc, sid := range a.services {
 		if sid == id {
-			n += len(a.conns[svc])
+			n += len(a.connsLocked(svc))
 		}
 	}
 	return n

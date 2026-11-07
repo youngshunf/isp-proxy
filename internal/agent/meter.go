@@ -32,7 +32,8 @@ type trackedConn struct {
 	net.Conn
 	a       *Agent
 	service string
-	sub     *sub // 服务所属订阅；接入撤销后仍指向原订阅
+	src     string // RemoteAddr().String()，Accept 时确定，用于 connBySrc 索引
+	sub     *sub   // 服务所属订阅；接入撤销后仍指向原订阅
 
 	authed  atomic.Bool
 	preRead atomic.Uint64 // 认证前读写字节，认证成功时计入
@@ -40,7 +41,11 @@ type trackedConn struct {
 }
 
 func newTrackedConn(c net.Conn, a *Agent, service string) *trackedConn {
-	return &trackedConn{Conn: c, a: a, service: service}
+	tc := &trackedConn{Conn: c, a: a, service: service}
+	if ra := c.RemoteAddr(); ra != nil {
+		tc.src = ra.String()
+	}
+	return tc
 }
 
 type connKey struct{}

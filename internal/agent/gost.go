@@ -79,23 +79,6 @@ func (globalAuther) Authenticate(ctx context.Context, user, password string, opt
 	return id, true
 }
 
-// connBySrc 按服务名和客户端地址在连接表中查找连接。
-// SOCKS5 处理器以 context.Background() 调用认证器，只附带源地址（x v0.28.1 socks/v5/selector.go）。
-func (a *Agent) connBySrc(service string, src net.Addr) *trackedConn {
-	if src == nil {
-		return nil
-	}
-	key := src.String()
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for c := range a.conns[service] {
-		if c.RemoteAddr().String() == key {
-			return c
-		}
-	}
-	return nil
-}
-
 // ---- 连接表 ----
 
 func trackingFactory(base string) registry.NewListener {
@@ -127,28 +110,6 @@ func (l *trackingListener) Accept() (net.Conn, error) {
 	tc := newTrackedConn(c, a, l.service)
 	a.track(tc) // 同时根据服务名确定所属订阅
 	return tc, nil
-}
-
-func (a *Agent) track(c *trackedConn) {
-	a.mu.Lock()
-	if id, ok := a.services[c.service]; ok {
-		c.sub = a.subs[id]
-	}
-	m := a.conns[c.service]
-	if m == nil {
-		m = map[*trackedConn]struct{}{}
-		a.conns[c.service] = m
-	}
-	m[c] = struct{}{}
-	a.mu.Unlock()
-}
-
-func (a *Agent) untrack(c *trackedConn) {
-	a.mu.Lock()
-	if m := a.conns[c.service]; m != nil {
-		delete(m, c)
-	}
-	a.mu.Unlock()
 }
 
 // ---- 出口：失败即拒绝的链 ----
