@@ -394,3 +394,37 @@ func TestGenerateDevCertsReusesCA(t *testing.T) {
 		t.Fatal("非法节点 ID 应报错")
 	}
 }
+
+// M3 新增的可选字段向后兼容：旧格式（无 clock_skew）照常解析，未填写时不出现在 JSON 中；
+// 回执的 ServerTime 经 JSON 往返保留亚毫秒精度，agent 可以按 1 毫秒精度估算偏差。
+func TestReportClockSkewBackwardCompatible(t *testing.T) {
+	now := time.Date(2026, 11, 8, 10, 0, 0, 123_456_789, time.UTC)
+	r := Report{NodeTime: now, PersistOK: true, Subscriptions: []SubscriptionReport{{ID: "sub_1", UsedTotal: 1}}}
+	b, _ := json.Marshal(r)
+	if strings.Contains(string(b), "clock_skew") {
+		t.Fatalf("空 ClockSkew 不应出现在 JSON: %s", b)
+	}
+	old := `{"node_time":"2026-11-08T10:00:00Z","agent_version":"x","applied_revision":3,"persist_ok":true,"subscriptions":[]}`
+	var back Report
+	if err := json.Unmarshal([]byte(old), &back); err != nil || back.ClockSkew != nil || back.Validate() != nil {
+		t.Fatalf("旧格式: %v %+v", err, back)
+	}
+	r.ClockSkew = &ClockSkew{LowMs: 2900, HighMs: 3100, Exceeded: true, MeasuredAt: now}
+	b, _ = json.Marshal(r)
+	for _, key := range []string{`"clock_skew":{`, `"low_ms":2900`, `"high_ms":3100`, `"exceeded":true`} {
+		if !strings.Contains(string(b), key) {
+			t.Errorf("JSON 缺少 %s: %s", key, b)
+		}
+	}
+	if err := json.Unmarshal(b, &back); err != nil || back.ClockSkew == nil || !back.ClockSkew.MeasuredAt.Equal(now) ||
+		back.ClockSkew.LowMs != 2900 || back.ClockSkew.HighMs != 3100 || !back.ClockSkew.Exceeded {
+		t.Fatalf("往返失败: %v %+v", err, back.ClockSkew)
+	}
+
+	ack := ReportAck{Revision: 1, ServerTime: now}
+	b, _ = json.Marshal(ack)
+	var ackBack ReportAck
+	if err := json.Unmarshal(b, &ackBack); err != nil || !ackBack.ServerTime.Equal(now) {
+		t.Fatalf("ServerTime 精度丢失: %s → %v", b, ackBack.ServerTime)
+	}
+}

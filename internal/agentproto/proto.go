@@ -135,7 +135,24 @@ type Report struct {
 	AppliedRevision uint64               `json:"applied_revision"`
 	PersistOK       bool                 `json:"persist_ok"`
 	Subscriptions   []SubscriptionReport `json:"subscriptions"`
+	// ClockSkew 是节点按最近一次回执的 ServerTime 估算的本地时钟偏差（M3 新增，可选；
+	// 首次上报或尚无回执时为空）。控制面也可以直接比较 NodeTime 与收到时刻。
+	ClockSkew *ClockSkew `json:"clock_skew,omitempty"`
 }
+
+// ClockSkew 是一次往返测得的节点时钟偏差区间（节点时钟减控制面时钟，毫秒）：真实偏差落在
+// [LowMs, HighMs]。区间由请求发出、收到回执的本地时刻与回执的 ServerTime 得出，宽度约为一次往返。
+type ClockSkew struct {
+	LowMs  int64 `json:"low_ms"`
+	HighMs int64 `json:"high_ms"`
+	// Exceeded 表示整个区间都超出 ±MaxClockSkewMs（R-14.7 时钟偏差告警），不会因往返时延误报。
+	Exceeded bool `json:"exceeded"`
+	// MeasuredAt 是收到该回执时的节点时间。
+	MeasuredAt time.Time `json:"measured_at"`
+}
+
+// MaxClockSkewMs 是允许的节点时钟偏差（R-14.7）：1 秒。
+const MaxClockSkewMs = 1000
 
 // SubscriptionReport 是一个订阅的观测值。
 type SubscriptionReport struct {
@@ -167,7 +184,9 @@ type ApplyError struct {
 
 // ReportAck 是控制面对上报的回执。Revision 大于 agent 已应用的修订号时，agent 应尽快重新拉取。
 type ReportAck struct {
-	Revision   uint64    `json:"revision"`
+	Revision uint64 `json:"revision"`
+	// ServerTime 是控制面处理该上报时的时钟，按 RFC 3339 带小数秒编码（time.Time 的 JSON 形式）。
+	// 精度必须不低于 1 毫秒（不得截断到秒）：agent 以 1 毫秒精度据此估算时钟偏差（ClockSkew）。
 	ServerTime time.Time `json:"server_time"`
 }
 
