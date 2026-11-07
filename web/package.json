@@ -2,12 +2,15 @@
   "name": "isp-proxy-web",
   "private": true,
   "packageManager": "pnpm@10.28.1",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev:portal": "pnpm --filter @isp/portal dev",
     "dev:admin": "pnpm --filter @isp/admin dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "e2e": "pnpm --filter @isp/e2e e2e"
   }
 }

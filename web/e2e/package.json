@@ -1,0 +1,14 @@
+{
+  "name": "@isp/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "22.19.1",
+    "typescript": "5.9.3"
+  }
+}
