@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { Tone } from '../lib/status'
+import type { Tone } from './tone'
 
 /** “剩余 / 总量”横条读数。条长表示剩余，不表示已用。 */
 export function Meter({

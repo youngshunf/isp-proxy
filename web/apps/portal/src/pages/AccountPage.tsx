@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Form, Input } from 'antd'
 import { useNavigate } from 'react-router'
 import { api, errorText, qk } from '../app/api'
-import { StateMark } from '../components/marks'
-import { Plate } from '../components/Plate'
+import { StateMark } from '@isp/ui'
+import { Plate } from '@isp/ui'
 import { TZ_LABEL, fmtDate } from '../lib/format'
 
 interface PwValues {
