@@ -39,9 +39,9 @@ type Config struct {
 	TOTPIssuer string `yaml:"totp_issuer"`
 
 	Agent AgentConfig `yaml:"agent"`
+	Core  CoreConfig  `yaml:"core"`
 	Mail  MailConfig  `yaml:"mail"`
 	Log   LogConfig   `yaml:"log"`
-	Core  CoreConfig  `yaml:"core"`
 	// Dev 只用于开发与平台 E2E（tests/isp），生产配置不得出现；配置了任一项时 serve 启动打印警告。
 	Dev DevConfig `yaml:"dev"`
 
@@ -76,10 +76,13 @@ type MailConfig struct {
 	SMTPUsername string `yaml:"smtp_username"`
 }
 
-// CoreConfig 是业务内核（kernel.Config）的可调项；零值取 kernel 默认值。
+// CoreConfig 是业务内核（kernel.Config）的配置；零值取 kernel 默认值。
 type CoreConfig struct {
-	// EchoURL 是出口检测使用的 IP 回显端点（返回纯文本 IP）。节点 probe.echo_url 非空时以节点配置为准。
+	// EchoURL 是节点探测使用的 IP 回显端点（经候选/当前出口访问，返回出口 IP）。节点 probe.echo_url 非空时以节点配置为准。
 	EchoURL string `yaml:"echo_url"`
+	// ExitCountries 是静态“出口 IP → 国家代码”映射：探测结果只带 IP，控制面据此判定国家是否符合套餐。
+	// 开发与测试用；生产应接 GeoIP 库（kernel.GeoLookup）。未列出的 IP 视为国家未知，换出口比较不通过。
+	ExitCountries map[string]string `yaml:"exit_countries"`
 	// SchedulerInterval 是调度循环间隔（默认 5 秒，docs/06 §3）。
 	SchedulerInterval time.Duration `yaml:"scheduler_interval"`
 	// TaskTimeout 是变更任务等待节点应用的上限（默认 2 分钟）。
@@ -94,7 +97,11 @@ type CoreConfig struct {
 
 // Kernel 转为 kernel.Config（Box 由 api.Assemble 填写）。
 func (c CoreConfig) Kernel() kernel.Config {
-	return kernel.Config{EchoURL: c.EchoURL, SchedulerInterval: c.SchedulerInterval, TaskTimeout: c.TaskTimeout,
+	var geo kernel.GeoLookup
+	if len(c.ExitCountries) > 0 {
+		geo = kernel.StaticGeo(c.ExitCountries)
+	}
+	return kernel.Config{EchoURL: c.EchoURL, Geo: geo, SchedulerInterval: c.SchedulerInterval, TaskTimeout: c.TaskTimeout,
 		ProbeTimeout: c.ProbeTimeout, ExitCheckInterval: c.ExitCheckInterval, NodeOfflineAfter: c.NodeOfflineAfter}
 }
 
@@ -103,12 +110,10 @@ type DevConfig struct {
 	// ClockOffsetFile 非空时，控制面业务时钟 = 系统时间 + 该文件中的 Go duration（如 "192h"、"-1m"；空文件或不存在为 0）。
 	// 文件每 200 毫秒检查一次，测试据此拨动保留期、未付款预留、冷却等时间（docs/05 §7）。
 	ClockOffsetFile string `yaml:"clock_offset_file"`
-	// Geo 是静态的“出口 IP → 国家代码”映射，供本机回环的假上游使用（出口国家判定，A-12）；生产接 GeoIP 库。
-	Geo map[string]string `yaml:"geo"`
 }
 
 // Enabled 报告是否配置了任何开发开关。
-func (d DevConfig) Enabled() bool { return d.ClockOffsetFile != "" || len(d.Geo) > 0 }
+func (d DevConfig) Enabled() bool { return d.ClockOffsetFile != "" }
 
 // LogConfig 是日志配置。
 type LogConfig struct {

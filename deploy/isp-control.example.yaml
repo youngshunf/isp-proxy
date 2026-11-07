@@ -20,6 +20,15 @@ agent:
   # key_file 由环境变量 ISP_AGENT_TLS_KEY_FILE 提供。
   long_poll: 25s
 
+# 业务内核。
+core:
+  # 节点探测访问的 IP 回显端点（返回出口 IP 的纯文本）。
+  echo_url: https://echo.example.com/ip
+  # 出口 IP → 国家代码（小写 ISO 3166-1）。探测只回报 IP，控制面据此判定“国家符合套餐”；未列出的视为未知、比较不通过。
+  # 开发与测试用静态映射；生产应接 GeoIP 库。
+  exit_countries:
+    203.0.113.10: us
+
 mail:
   # smtp：生产；file：开发与测试，把邮件写成 .eml 文件，不发真实邮件。
   mode: smtp

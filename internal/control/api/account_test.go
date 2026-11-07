@@ -135,8 +135,14 @@ func TestUnverifiedCannotBuyOrReadConnections(t *testing.T) {
 		p, _ := httpx.UserFrom(r.Context())
 		httpx.WriteJSON(w, 200, map[string]string{"user": p.UserID})
 	}
-	// 用与 ctl-core 相同的级别挂两个代表性路由（下单、读取连接）。
-	routes := append(e.platform.Routes,
+	// 用与 ctl-core 相同的级别挂两个代表性路由（下单、读取连接），替换真实处理器以便计数。
+	var routes []httpx.Route
+	for _, rt := range e.platform.Routes {
+		if k := rt.Method + " " + rt.Pattern; k != "POST /api/orders" && k != "GET /api/subscriptions/{subscriptionId}" {
+			routes = append(routes, rt)
+		}
+	}
+	routes = append(routes,
 		httpx.Route{Method: "POST", Pattern: "/api/orders", Auth: httpx.VerifiedUser, Handler: ok},
 		httpx.Route{Method: "GET", Pattern: "/api/subscriptions/{subscriptionId}", Auth: httpx.VerifiedUser, Handler: ok})
 	h, err := api.NewRouter(api.Options{Users: e.platform.Account, Admins: e.platform.Admin}, routes)

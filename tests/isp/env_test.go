@@ -327,16 +327,22 @@ core:
   task_timeout: 20s
   probe_timeout: 15s
   node_offline_after: 6s
+%s
 dev:
   clock_offset_file: %s
 `, publicPort, agentPort, filepath.Join(e.CertDir, "ca.pem"), filepath.Join(e.CertDir, "server.pem"),
-		filepath.Join(e.CertDir, "server-key.pem"), e.MailDir, e.Canary.Addr, e.ClockFile)
-	if geo.Len() > 0 {
-		cfg += "  geo:\n" + geo.String()
-	}
+		filepath.Join(e.CertDir, "server-key.pem"), e.MailDir, e.Canary.Addr, exitCountries(geo.String()), e.ClockFile)
+
 	if err := os.WriteFile(e.CfgPath, []byte(cfg), 0o600); err != nil {
 		e.t.Fatal(err)
 	}
+}
+
+func exitCountries(lines string) string {
+	if lines == "" {
+		return ""
+	}
+	return "  exit_countries:\n" + lines
 }
 
 func (e *Env) writeAgentConfig(flush time.Duration) {

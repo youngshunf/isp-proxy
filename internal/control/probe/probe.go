@@ -136,8 +136,14 @@ func (s *Service) ApplyResult(ctx context.Context, tx *kernel.Tx, node string, r
 			errText = "回显端点返回的 IP 无法解析"
 		}
 	}
-	if c := strings.ToLower(strings.TrimSpace(r.CountryCode)); ccRe.MatchString(c) {
-		cc = &c
+	// 节点探测只带观测 IP 与延迟，不带国家（M3）：国家由控制面按 IP 解析（可插拔，见 kernel.GeoLookup）。
+	// 节点若附带了国家也不采信，避免以节点侧数据做独占/国家判定。
+	if ip != nil {
+		if c, ok := s.env.Cfg.Geo.Country(ctx, *ip); ok {
+			if c = strings.ToLower(strings.TrimSpace(c)); ccRe.MatchString(c) {
+				cc = &c
+			}
+		}
 	}
 	if errText == "" && result == "failed" {
 		errText = "探测失败"

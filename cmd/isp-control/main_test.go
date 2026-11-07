@@ -137,16 +137,16 @@ log:
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// 节点接口：带节点证书能完成 mTLS（ctl-core 未接入时按未知节点 403）；不带证书握手失败。
+	// 节点接口：带节点证书完成 mTLS 并取得种子节点的期望状态；不带证书握手失败。
 	tlsCfg, err := agentproto.LoadClientTLSConfig(filepath.Join(certs, "ca.pem"), filepath.Join(certs, "node-nod_dev00000000000000001.pem"),
 		filepath.Join(certs, "node-nod_dev00000000000000001-key.pem"), "localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ac := agentproto.NewClient("https://"+addrs[1], tlsCfg)
-	_, err = ac.Fetch(context.Background())
-	if se, ok := err.(*agentproto.StatusError); !ok || se.Status != 403 {
-		t.Fatalf("期望 403，得到 %v", err)
+	d, err := ac.Fetch(context.Background())
+	if err != nil || d.NodeID != "nod_dev00000000000000001" {
+		t.Fatalf("期望取得种子节点的期望状态，得到 %+v %v", d, err)
 	}
 	noCert := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: tlsCfg.RootCAs, ServerName: "localhost", MinVersion: tls.VersionTLS13}}}
 	if res, err := noCert.Get("https://" + addrs[1] + agentproto.PathDesired); err == nil {

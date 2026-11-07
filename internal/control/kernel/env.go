@@ -43,6 +43,9 @@ type Mailer interface {
 type Config struct {
 	// Box 加密接入密码与上游密码（AES-256-GCM，密钥来自 ISP_SECRET_KEY，与平台共用）。必填。
 	Box *secret.Box
+	// Geo 按出口 IP 解析国家（探测结果不带国家，控制面自行解析后再做国家符合判定，A-12）。
+	// 默认 StaticGeo{}（全部未知 → 国家不符，不放行切换）；开发与测试用静态映射，生产接 GeoIP 库。
+	Geo GeoLookup
 	// EchoURL 是探测使用的 IP 回显端点。
 	EchoURL string
 	// ExitCheckInterval 是定时出口检测间隔；超过两倍未更新视为 stale。默认 10 分钟。
@@ -71,7 +74,24 @@ type Config struct {
 	UsageRetention time.Duration
 }
 
+// GeoLookup 按 IP 解析 ISO 3166-1 alpha-2 国家代码（大小写不限）。未知时 ok = false。
+type GeoLookup interface {
+	Country(ctx context.Context, ip string) (code string, ok bool)
+}
+
+// StaticGeo 是静态 IP → 国家映射（开发、测试与种子配置）。
+type StaticGeo map[string]string
+
+// Country 实现 GeoLookup。
+func (m StaticGeo) Country(_ context.Context, ip string) (string, bool) {
+	c, ok := m[ip]
+	return c, ok
+}
+
 func (c Config) withDefaults() Config {
+	if c.Geo == nil {
+		c.Geo = StaticGeo{}
+	}
 	def := func(d *time.Duration, v time.Duration) {
 		if *d <= 0 {
 			*d = v
