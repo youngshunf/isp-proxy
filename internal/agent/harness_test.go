@@ -40,6 +40,9 @@ import (
 
 func TestMain(m *testing.M) {
 	logger.SetDefault(xlogger.Nop())
+	if os.Getenv(crashChildEnv) != "" {
+		os.Exit(crashChild()) // A-W1：作为被 kill -9 的子进程运行，见 crash_test.go
+	}
 	os.Exit(m.Run())
 }
 
@@ -152,9 +155,17 @@ func (u *fakeUpstream) serve(c net.Conn) {
 
 func selfSignedTLS(t testing.TB) *tls.Config {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cfg, err := genSelfSignedTLS()
 	if err != nil {
 		t.Fatal(err)
+	}
+	return cfg
+}
+
+func genSelfSignedTLS() (*tls.Config, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -166,9 +177,9 @@ func selfSignedTLS(t testing.TB) *tls.Config {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	return &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	return &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}, nil
 }
 
 // ---- 环境 ----
