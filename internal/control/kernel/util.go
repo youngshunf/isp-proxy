@@ -158,3 +158,6 @@ func HashJSON(v any) []byte {
 
 // Days 返回 n 天。
 func Days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
+
+// Itoa 格式化整数。
+func Itoa(n int64) string { return strconv.FormatInt(n, 10) }

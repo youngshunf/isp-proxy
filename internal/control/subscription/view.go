@@ -59,26 +59,26 @@ const outerCols = `id, user_id, email, user_status, name, lifecycle, lifecycle_r
 	created_at, active_task, open_exit_request, open_orders, blockers`
 
 type row struct {
-	ID, UserID, Email, UserStatus, Name, Lifecycle         string
-	LifecycleReason, NodeID, NodeStatus, NodeHost           *string
-	PlanID, PlanVersionID                                   string
-	PlanVersion                                             int
-	PlanName, CC, Country, City                             string
-	Concurrency, Bandwidth                                  int
-	AdminPaused                                             bool
-	PausedReason                                            *string
-	EntitledBytes, UsedBytes, EntitledSecs, BeforeSecs      int64
-	FirstReady, PeriodStarted, Expires, RetentionEnds       *time.Time
-	Released, Deleted                                       *time.Time
-	CurAccess, CurExit                                      *string
-	DesiredV, AppliedV                                      int64
-	ActiveConns                                             int
-	UsageReportedAt                                         *time.Time
-	RulesVersion                                            string
-	CreatedFromOrder                                        *string
-	CreatedAt                                               time.Time
-	ActiveTask, OpenExitReq                                 *string
-	OpenOrders, Blockers                                    []string
+	ID, UserID, Email, UserStatus, Name, Lifecycle     string
+	LifecycleReason, NodeID, NodeStatus, NodeHost      *string
+	PlanID, PlanVersionID                              string
+	PlanVersion                                        int
+	PlanName, CC, Country, City                        string
+	Concurrency, Bandwidth                             int
+	AdminPaused                                        bool
+	PausedReason                                       *string
+	EntitledBytes, UsedBytes, EntitledSecs, BeforeSecs int64
+	FirstReady, PeriodStarted, Expires, RetentionEnds  *time.Time
+	Released, Deleted                                  *time.Time
+	CurAccess, CurExit                                 *string
+	DesiredV, AppliedV                                 int64
+	ActiveConns                                        int
+	UsageReportedAt                                    *time.Time
+	RulesVersion                                       string
+	CreatedFromOrder                                   *string
+	CreatedAt                                          time.Time
+	ActiveTask, OpenExitReq                            *string
+	OpenOrders, Blockers                               []string
 }
 
 func scanRow(r interface{ Scan(...any) error }) (*row, error) {
@@ -171,18 +171,18 @@ type Access struct {
 
 // View 是 OpenAPI Subscription。
 type View struct {
-	ID                string        `json:"id"`
-	Name              string        `json:"name"`
-	Plan              Plan          `json:"plan"`
-	Lifecycle         string        `json:"lifecycle"`
-	Blockers          []string      `json:"blockers"`
-	Time              Time          `json:"time"`
-	Traffic           Traffic       `json:"traffic"`
-	Exit              *Exit         `json:"exit"`
-	Access            *Access       `json:"access"`
-	Quotas            task.Quotas   `json:"quotas"`
-	OpenExitRequestID *string       `json:"openExitRequestId"`
-	OpenOrderIDs      []string      `json:"openOrderIds"`
+	ID                string      `json:"id"`
+	Name              string      `json:"name"`
+	Plan              Plan        `json:"plan"`
+	Lifecycle         string      `json:"lifecycle"`
+	Blockers          []string    `json:"blockers"`
+	Time              Time        `json:"time"`
+	Traffic           Traffic     `json:"traffic"`
+	Exit              *Exit       `json:"exit"`
+	Access            *Access     `json:"access"`
+	Quotas            task.Quotas `json:"quotas"`
+	OpenExitRequestID *string     `json:"openExitRequestId"`
+	OpenOrderIDs      []string    `json:"openOrderIds"`
 }
 
 func (x *row) plan() Plan {
@@ -244,16 +244,16 @@ func displayAccess(ctx context.Context, q kernel.Q, x *row) (*accessRow, error) 
 // exitRow 是一个出口绑定及其资源。
 type exitRow struct {
 	ID, State, ResourceID, Provider, Protocol, Host string
-	Version, Port                                    int
-	VerifiedIP, VerifiedCC                           *string
-	CheckResult, CheckIP, CheckCC, CheckCity, ASN    *string
-	CheckError                                       *string
-	Latency                                          *int
-	CheckedAt, BoundAt, UnboundAt                    *time.Time
-	UnboundReason, TaskID                            *string
-	CreatedAt                                        time.Time
-	ResCC, ResCountry, ResCity                       string
-	ResLastIP                                        *string
+	Version, Port                                   int
+	VerifiedIP, VerifiedCC                          *string
+	CheckResult, CheckIP, CheckCC, CheckCity, ASN   *string
+	CheckError                                      *string
+	Latency                                         *int
+	CheckedAt, BoundAt, UnboundAt                   *time.Time
+	UnboundReason, TaskID                           *string
+	CreatedAt                                       time.Time
+	ResCC, ResCountry, ResCity                      string
+	ResLastIP                                       *string
 }
 
 const exitCols = `b.id, b.state, b.resource_id, r.provider, r.protocol, r.host, b.version, r.port, host(b.verified_ip),
