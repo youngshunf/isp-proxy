@@ -54,3 +54,51 @@ describe('封禁用户', () => {
     expect((await api.adminGetUser({ userId: u.id })).status).toBe('active')
   })
 })
+
+describe('服务器直出代理（D-25）', () => {
+  it('勾选赠送并填带宽 → 只发一次请求，订阅表格出现直出订阅', async () => {
+    const { api, u, detail } = await alice()
+    expect(detail.direct.subscriptionId).toBeNull()
+    const spy = vi.spyOn(api, 'adminGrantDirect')
+    const { user } = renderApp(`/users/${u.id}`, api)
+
+    await user.click(await screen.findByRole('checkbox', { name: '赠送服务器直出代理' }))
+    const bw = screen.getByLabelText('带宽上限（Mbps）') as HTMLInputElement
+    expect(bw.value).toBe(String(detail.direct.defaultBandwidthMbps))
+    await user.clear(bw)
+    await user.type(bw, '20')
+    await user.click(screen.getByRole('button', { name: '赠送' }))
+
+    expect(await screen.findByText('已赠送服务器直出代理', {}, { timeout: 3000 })).toBeTruthy()
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0]![0]).toEqual({ userId: u.id, body: { bandwidthMbps: 20 } })
+    expect(await screen.findByText(/\d+ 并发 · 20 Mbps · 不限流量/, {}, { timeout: 3000 })).toBeTruthy()
+    const after = await api.adminGetUser({ userId: u.id })
+    expect(after.direct).toMatchObject({ bandwidthMbps: 20, lifecycle: 'active' })
+    const direct = after.subscriptions.find((s) => s.kind === 'direct')!
+    expect(direct.plan).toBeNull()
+    expect(direct.direct).toMatchObject({ bandwidthMbps: 20 })
+  })
+
+  it('取消勾选 → 确认框列出影响，原因必填；确认后收回', async () => {
+    const { api, u } = await alice()
+    await api.adminGrantDirect({ userId: u.id, body: {} })
+    const spy = vi.spyOn(api, 'adminRevokeDirect')
+    const { user } = renderApp(`/users/${u.id}`, api)
+
+    const box = await screen.findByRole('checkbox', { name: '赠送服务器直出代理' })
+    expect((box as HTMLInputElement).checked).toBe(true)
+    await user.click(box)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('接入端口进入冷却期')
+    const ok = within(dialog).getByRole('button', { name: '收回' })
+    expect(isDisabled(ok)).toBe(true)
+    await user.type(within(dialog).getByLabelText('收回原因'), '活动结束')
+    await user.click(ok)
+
+    expect(await screen.findByText('已收回服务器直出代理', {}, { timeout: 3000 })).toBeTruthy()
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0]![0]).toEqual({ userId: u.id, query: { reason: '活动结束' } })
+    await waitFor(async () => expect((await api.adminGetUser({ userId: u.id })).direct.subscriptionId).toBeNull())
+  })
+})

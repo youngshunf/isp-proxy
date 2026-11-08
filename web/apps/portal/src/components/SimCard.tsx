@@ -1,6 +1,6 @@
 import { ArrowRightOutlined } from '@ant-design/icons'
 import { Link } from 'react-router'
-import type { Subscription } from '@isp/api-client'
+import type { IspSubscription, Subscription } from '@isp/api-client'
 import { fmtAgo } from '../lib/format'
 import { EXIT_CHECK, primaryState } from '../lib/status'
 import { Balances } from './Balances'
@@ -24,7 +24,7 @@ export function StateCell({ sub }: { sub: Subscription }) {
   )
 }
 
-export function ExitFace({ sub, large = false }: { sub: Subscription; large?: boolean }) {
+export function ExitFace({ sub, large = false }: { sub: IspSubscription; large?: boolean }) {
   const blocked = sub.blockers.length > 0
   if (!sub.exit) {
     return (
@@ -64,7 +64,7 @@ export function ExitFace({ sub, large = false }: { sub: Subscription; large?: bo
 }
 
 /** 我的 IP 页上的一张 SIM 卡：卡面是出口，卡托是套餐余量，卡脚是复制连接。 */
-export function SimCard({ sub }: { sub: Subscription }) {
+export function SimCard({ sub }: { sub: IspSubscription }) {
   const nameId = `sim-${sub.id}`
   const extraBlockers = sub.blockers.slice(1)
   return (

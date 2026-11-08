@@ -22,10 +22,22 @@ export default function ExitChangePage() {
   const q = useQuery({ queryKey: qk.sub(id), queryFn: () => api.adminGetSubscription({ subscriptionId: id }) })
   if (q.isPending) return <Loading rows={8} />
   if (q.isError) return <LoadError error={q.error} retry={() => void q.refetch()} />
-  return <Wizard s={q.data} />
+  const s = q.data
+  if (!s.plan) {
+    // 服务器直出代理（D-25）没有 ISP 出口，不能换出口。
+    return (
+      <>
+        <PageHead back={{ to: `/subscriptions/${s.id}`, label: s.name }} title="换出口" />
+        <Callout tone="stop">服务器直出代理经节点自身地址出站，没有出口可换。</Callout>
+      </>
+    )
+  }
+  return <Wizard s={{ ...s, plan: s.plan }} />
 }
 
-function Wizard({ s }: { s: AdminSubscriptionDetail }) {
+type IspDetail = AdminSubscriptionDetail & { plan: NonNullable<AdminSubscriptionDetail['plan']> }
+
+function Wizard({ s }: { s: IspDetail }) {
   const api = useApi()
   const [sp] = useSearchParams()
   const requestId = sp.get('request')
@@ -94,7 +106,7 @@ function Wizard({ s }: { s: AdminSubscriptionDetail }) {
 
 type Dispatch = (a: Parameters<ReturnType<typeof makeWizardReducer>>[1]) => void
 
-function CandidateStep({ s, st, dispatch, disabled }: { s: AdminSubscriptionDetail; st: WizardState; dispatch: Dispatch; disabled: boolean }) {
+function CandidateStep({ s, st, dispatch, disabled }: { s: IspDetail; st: WizardState; dispatch: Dispatch; disabled: boolean }) {
   const api = useApi()
   const [sameCountry, setSameCountry] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -242,7 +254,7 @@ function Check({ ok, children }: { ok: boolean; children: React.ReactNode }) {
   )
 }
 
-function CompareStep({ s, st, dispatch }: { s: AdminSubscriptionDetail; st: WizardState; dispatch: Dispatch }) {
+function CompareStep({ s, st, dispatch }: { s: IspDetail; st: WizardState; dispatch: Dispatch }) {
   const p = st.probe!
   const c = p.comparison
   const rejected = (st.rejection?.length ?? 0) > 0
@@ -319,7 +331,7 @@ function CompareStep({ s, st, dispatch }: { s: AdminSubscriptionDetail; st: Wiza
   )
 }
 
-function SubmitStep({ s, st, dispatch, requestId, defaultAlso }: { s: AdminSubscriptionDetail; st: WizardState; dispatch: Dispatch; requestId?: string; defaultAlso: boolean }) {
+function SubmitStep({ s, st, dispatch, requestId, defaultAlso }: { s: IspDetail; st: WizardState; dispatch: Dispatch; requestId?: string; defaultAlso: boolean }) {
   const api = useApi()
   const [reason, setReason] = useState('')
   const [also, setAlso] = useState(defaultAlso)
@@ -381,7 +393,7 @@ function SubmitStep({ s, st, dispatch, requestId, defaultAlso }: { s: AdminSubsc
   )
 }
 
-function ResultStep({ s, st, dispatch }: { s: AdminSubscriptionDetail; st: WizardState; dispatch: Dispatch }) {
+function ResultStep({ s, st, dispatch }: { s: IspDetail; st: WizardState; dispatch: Dispatch }) {
   const q = useTask(st.task!.id, st.task!)
   useEffect(() => {
     if (q.data) dispatch({ type: 'task', task: q.data })

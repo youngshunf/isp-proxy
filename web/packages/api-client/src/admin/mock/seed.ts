@@ -79,6 +79,8 @@ export interface SubRow {
   userId: string
   nodeId: string | null
   plan: { planId: string; planVersionId: string; planVersion: number; name: string; countryCode: string; country: string; city: string; concurrency: number; bandwidthMbps: number }
+  /** 服务器直出代理（D-25）：有值时 plan 只是占位（视图里输出 null），没有出口与账本。 */
+  direct?: { bandwidthMbps: number; maxConnections: number }
   lifecycle: AdminLifecycle
   lifecycleReason: string | null
   adminPaused: boolean

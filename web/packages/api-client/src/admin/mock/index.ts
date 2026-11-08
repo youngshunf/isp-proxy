@@ -84,6 +84,7 @@ const BLOCKER_ORDER: Blocker[] = [
   'pending',
   'fulfill_failed',
   'expired',
+  'no_paid_subscription',
   'traffic_exhausted',
   'changing',
   'dataplane',
@@ -209,8 +210,30 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
   const activeTask = (subId: string) => db.tasks.find((t) => t.t.subscriptionId === subId && (t.t.state === 'queued' || t.t.state === 'running'))
   const nodeOnline = (id: string | null) => (id ? (db.nodes.find((n) => n.id === id)?.online ?? false) : false)
 
+  /** 直出代理的可用截止（D-25）：该用户时长有效（已开始、未到期、未删除）的 ISP 订阅中最晚的到期时间。 */
+  const paidUntil = (userId: string): string | null => {
+    let best: string | null = null
+    for (const x of db.subs) {
+      if (x.userId !== userId || x.direct || x.lifecycle === 'deleted' || !x.startedAt || !x.expiresAt) continue
+      if (Date.parse(x.expiresAt) <= now) continue
+      if (best === null || x.expiresAt > best) best = x.expiresAt
+    }
+    return best
+  }
+
   const blockersOf = (s: SubRow): Blocker[] => {
     const set = new Set<Blocker>()
+    if (s.direct) {
+      if (userOf(s).status === 'banned') set.add('account_banned')
+      if (s.adminPaused) set.add('admin_paused')
+      if (s.lifecycle === 'pending') set.add('pending')
+      if (s.lifecycle === 'fulfill_failed') set.add('fulfill_failed')
+      if (s.lifecycle === 'active' && !paidUntil(s.userId)) set.add('no_paid_subscription')
+      const t = activeTask(s.id)
+      if (t) set.add('changing')
+      if (s.lifecycle === 'active' && s.nodeId && !nodeOnline(s.nodeId)) set.add('dataplane')
+      return BLOCKER_ORDER.filter((b) => set.has(b))
+    }
     if (userOf(s).status === 'banned') set.add('account_banned')
     if (s.lifecycle === 'released' || s.lifecycle === 'deleted') set.add('released')
     if (s.adminPaused) set.add('admin_paused')
@@ -228,13 +251,16 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
   const subView = (s: SubRow): AdminSubscription => {
     const { bytes, seconds } = sums(s.id)
     const u = userOf(s)
-    const remainingSeconds = s.expiresAt && s.lifecycle === 'active' ? Math.max(0, Math.floor((Date.parse(s.expiresAt) - now) / 1000)) : 0
+    const until = s.direct ? paidUntil(s.userId) : s.expiresAt
+    const remainingSeconds = until && s.lifecycle === 'active' ? Math.max(0, Math.floor((Date.parse(until) - now) / 1000)) : 0
     return {
       id: s.id,
       name: s.name,
+      kind: s.direct ? 'direct' : 'isp',
       user: { id: u.id, email: u.email },
       nodeId: s.nodeId,
-      plan: s.plan,
+      plan: s.direct ? null : s.plan,
+      direct: s.direct ? { ...s.direct, paidUntil: until } : null,
       lifecycle: s.lifecycle,
       blockers: blockersOf(s),
       adminPaused: s.adminPaused,
@@ -242,7 +268,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
       time: {
         periodDays: Math.round(seconds / 86_400),
         startedAt: s.startedAt,
-        expiresAt: s.expiresAt,
+        expiresAt: until,
         remainingSeconds,
         retentionEndsAt: s.retentionEndsAt,
       },
@@ -547,6 +573,20 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
 
   // ---------------------------------------------------------------- 履约
   /** 收款确认或代建后新建的订阅（待履约，没有接入与出口）。 */
+  const DIRECT_DEFAULT_MBPS = 10
+  const DIRECT_MAX_CONNS = 64
+  const liveDirect = (userId: string) => db.subs.find((s) => s.userId === userId && s.direct && s.lifecycle !== 'deleted')
+  const directOf = (userId: string) => {
+    const s = liveDirect(userId)
+    return {
+      subscriptionId: s?.id ?? null,
+      lifecycle: s && s.lifecycle !== 'deleted' ? s.lifecycle : null,
+      bandwidthMbps: s?.direct?.bandwidthMbps ?? null,
+      defaultBandwidthMbps: DIRECT_DEFAULT_MBPS,
+      maxConnections: s?.direct?.maxConnections ?? DIRECT_MAX_CONNS,
+    }
+  }
+
   const blankSub = (o: { name: string; userId: string; planId: string; orderId: string; nodeId?: string | null }): SubRow => {
     const plan = db.plans.find((p) => p.id === o.planId)!
     const pv = plan.versions[0]!
@@ -838,6 +878,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
           .filter((s) => (lifecycles?.length ? lifecycles.includes(s.lifecycle) : s.lifecycle !== 'deleted'))
           .filter((s) => !q.userId || s.userId === q.userId)
           .filter((s) => !q.nodeId || s.nodeId === q.nodeId)
+          .filter((s) => !q.kind || (q.kind === 'direct') === !!s.direct)
           .map(subView)
           .filter((v) => !q.blocker || v.blockers.includes(q.blocker))
           .filter((v) => q.usable === undefined || (q.usable ? v.blockers.length === 0 : v.blockers.length > 0))
@@ -1461,7 +1502,65 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
           subscriptions: db.subs.filter((s) => s.userId === u.id).map(subView),
           recentOrders: db.orders.filter((o) => o.user.id === u.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10).map(orderView),
           activeSessions: u.activeSessions,
+          direct: directOf(u.id),
         }
+      }),
+    adminGrantDirect: ({ userId, body }) =>
+      wait((): AdminSubscriptionDetail => {
+        writer('direct.grant', 'user', userId)
+        const u = findUser(userId)
+        const bw = body.bandwidthMbps ?? DIRECT_DEFAULT_MBPS
+        if (!Number.isInteger(bw) || bw < 1 || bw > 10000) fail('invalid', '带宽上限需为 1～10000 Mbps')
+        const cur = liveDirect(u.id)
+        if (cur) {
+          if (cur.direct!.bandwidthMbps !== bw) {
+            event(cur, 'adjusted', `带宽上限 ${cur.direct!.bandwidthMbps} → ${bw} Mbps`)
+            audit('direct.update', 'subscription', cur.id, { userId: u.id, fromBandwidthMbps: cur.direct!.bandwidthMbps, bandwidthMbps: bw })
+            cur.direct = { ...cur.direct!, bandwidthMbps: bw }
+            cur.plan = { ...cur.plan, bandwidthMbps: bw }
+            cur.desiredVersion += 1
+            cur.appliedVersion = cur.desiredVersion
+          }
+          return subDetail(cur)
+        }
+        const node = db.nodes.find((n) => n.online) ?? fail('precondition', '没有可用的中转节点，暂不能赠送直出代理')
+        const placeholder = db.plans[0]!
+        const s = blankSub({ name: '服务器直出', userId: u.id, planId: placeholder.id, orderId: '', nodeId: node.id })
+        s.createdFromOrderId = null
+        s.direct = { bandwidthMbps: bw, maxConnections: DIRECT_MAX_CONNS }
+        s.plan = { planId: '', planVersionId: '', planVersion: 0, name: '服务器直出', countryCode: '', country: '', city: '', concurrency: DIRECT_MAX_CONNS, bandwidthMbps: bw }
+        s.freeExitChangesLeft = 0
+        const port = 27000 + db.seq * 3
+        const accId = nextId('acc')
+        s.access = { id: accId, version: 1, state: 'active', host: node.publicHost, username: `u${s.id.slice(4, 9)}`, ports: { http: port, https: port + 1, socks5: port + 2 }, issuedAt: iso(now), activatedAt: iso(now) }
+        s.accessPassword = secretOf(accId)
+        s.accessVersions.unshift({ id: accId, version: 1, changeKind: 'initial', state: 'active', username: s.access.username, ports: s.access.ports, issuedAt: iso(now), activatedAt: iso(now), revokedAt: null, revokeReason: null, taskId: null })
+        s.lifecycle = 'active'
+        s.firstReadyAt = iso(now)
+        s.usageReportedAt = iso(now)
+        s.activeConns = 0
+        s.desiredVersion = 1
+        s.appliedVersion = 1
+        db.subs.unshift(s)
+        event(s, 'adjusted', `管理员赠送服务器直出代理：带宽上限 ${bw} Mbps、并发 ${DIRECT_MAX_CONNS}，不限流量，跟随付费 IP 有效`)
+        event(s, 'ready', '服务器直出代理已开通，接入 v1；不限流量，跟随你的付费 IP 有效', { actor: { kind: 'node', id: node.id } })
+        audit('direct.grant', 'subscription', s.id, { userId: u.id, bandwidthMbps: bw, reason: body.reason ?? '' })
+        return subDetail(s)
+      }),
+    adminRevokeDirect: ({ userId, query }) =>
+      wait((): void => {
+        writer('direct.revoke', 'user', userId)
+        const u = findUser(userId)
+        const s = liveDirect(u.id)
+        if (!s) return
+        for (const v of s.accessVersions) if (v.state !== 'revoked') Object.assign(v, { state: 'revoked', revokedAt: iso(now), revokeReason: '收回直出代理' })
+        s.access = null
+        s.accessPassword = null
+        s.lifecycle = 'deleted'
+        s.deletedAt = iso(now)
+        s.lifecycleReason = query?.reason || '管理员收回'
+        event(s, 'deleted', `管理员收回服务器直出代理：${s.lifecycleReason}`)
+        audit('direct.revoke', 'subscription', s.id, { userId: u.id, reason: s.lifecycleReason })
       }),
     adminBanUser: ({ userId, body }) =>
       wait(() => {

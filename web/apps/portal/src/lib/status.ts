@@ -21,6 +21,7 @@ const BLOCKER_STATE: Record<Blocker, StateView> = {
   pending: { label: '开通中', tone: 'wait', shape: 'half' },
   fulfill_failed: { label: '开通异常', tone: 'stop', shape: 'hollow' },
   expired: { label: '已到期', tone: 'stop', shape: 'hollow' },
+  no_paid_subscription: { label: '没有付费 IP', tone: 'stop', shape: 'hollow' },
   traffic_exhausted: { label: '流量用尽', tone: 'stop', shape: 'hollow' },
   changing: { label: '变更中', tone: 'wait', shape: 'half' },
   dataplane: { label: '线路异常', tone: 'stop', shape: 'hollow' },
@@ -55,6 +56,8 @@ export function blockerText(b: Blocker, sub: Subscription): string {
       return sub.time.retentionEndsAt
         ? `已于 ${fmtDay(sub.time.expiresAt)} 到期，停止转发。原出口与接入保留到 ${fmtDay(sub.time.retentionEndsAt)}，期内续时长即可恢复；剩余流量保留。`
         : '时长已到期，停止转发；剩余流量保留，续时长后重新开通。'
+    case 'no_paid_subscription':
+      return '服务器直出代理跟随你的付费 IP 有效：当前没有时长有效的付费 IP，已停止转发。续时长或购买 IP 后自动恢复，无需重新配置。'
     case 'traffic_exhausted':
       return '流量已用尽，全部连接已断开。买流量后恢复，到期时间不变。'
     case 'pending':
@@ -86,6 +89,8 @@ export function remedyFor(b: Blocker, sub: Subscription): Remedy | null {
       return { label: '续时长', to: `/buy/renew/${sub.id}?kind=time` }
     case 'traffic_exhausted':
       return { label: '买流量', to: `/buy/renew/${sub.id}?kind=traffic` }
+    case 'no_paid_subscription':
+      return { label: '购买 IP', to: '/buy' }
     case 'pending':
     case 'fulfill_failed': {
       const order = sub.openOrderIds[0]

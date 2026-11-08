@@ -15,6 +15,21 @@ export type Exit = S['Exit']
 export type AccessField = S['AccessField']
 export type Access = S['Access']
 export type Subscription = S['Subscription']
+/** 订阅类型：isp 经 ISP 上游出站；direct 是管理员赠送的服务器直出代理（D-25）。 */
+export type SubscriptionKind = S['SubscriptionKind']
+export type SubscriptionDirect = S['SubscriptionDirect']
+/** ISP 订阅：有套餐快照，没有直出信息。 */
+export type IspSubscription = Subscription & { kind: 'isp'; plan: NonNullable<Subscription['plan']>; direct: null }
+/** 服务器直出代理：没有套餐与出口，只限带宽不限流量，可用截止跟随付费订阅（direct.paidUntil）。 */
+export type DirectSubscription = Subscription & { kind: 'direct'; plan: null; direct: NonNullable<Subscription['direct']> }
+
+export function isDirect(s: Subscription): s is DirectSubscription {
+  return s.kind === 'direct' && s.direct !== null
+}
+
+export function isIsp(s: Subscription): s is IspSubscription {
+  return s.kind === 'isp' && s.plan !== null
+}
 export type SubscriptionEventKind = S['SubscriptionEventKind']
 export type SubscriptionEvent = S['SubscriptionEvent']
 export type Money = S['Money']

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Input, InputNumber, Modal, Radio, Select } from 'antd'
 import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import type { AdminLifecycle, AdminSubscription, Blocker } from '@isp/api-client/admin'
+import type { AdminLifecycle, AdminSubscription, Blocker, SubscriptionKind } from '@isp/api-client/admin'
 import { Plate, fmtBytes, fmtMoney } from '@isp/ui'
 import { errorText, newIdempotencyKey, qk, useApi } from '../app/api'
 import { Callout, PageHead } from '../components/bits'
@@ -20,6 +20,7 @@ export default function SubscriptionsPage() {
   const filters = useMemo<FilterDef[]>(
     () => [
       { key: 'q', label: '搜索', type: 'search', placeholder: '名称、订阅 ID、用户邮箱、出口 IP、用户名' , width: 300 },
+      { key: 'kind', label: '类型', type: 'select', options: [{ value: 'isp', label: 'ISP 出口' }, { value: 'direct', label: '服务器直出' }], width: 120 },
       { key: 'lifecycle', label: '生命周期', type: 'multi', options: options(LIFECYCLE) },
       { key: 'blocker', label: '阻断原因', type: 'select', options: options(BLOCKER) },
       { key: 'usable', label: '可用', type: 'bool', options: [{ value: 'true', label: '可用' }, { value: 'false', label: '不可用' }], width: 110 },
@@ -55,6 +56,7 @@ export default function SubscriptionsPage() {
             api.adminListSubscriptions({
               query: {
                 q: str(f, 'q'),
+                kind: str(f, 'kind') as SubscriptionKind | undefined,
                 lifecycle: arr<AdminLifecycle>(f, 'lifecycle'),
                 blocker: str(f, 'blocker') as Blocker | undefined,
                 usable: bool(f, 'usable'),

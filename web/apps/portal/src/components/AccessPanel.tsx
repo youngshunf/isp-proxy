@@ -75,7 +75,13 @@ function ChangeAccessDialog({
         <div>
           <b>旧连接会立即失效，正在使用的程序需要更新配置。</b>
           <div>
-            出口 <span className="mono">{sub.exit?.ip ?? '—'}</span>、剩余时长和流量都不变。
+            {sub.kind === 'direct' ? (
+              '直出线路、带宽上限与累计用量都不变。'
+            ) : (
+              <>
+                出口 <span className="mono">{sub.exit?.ip ?? '—'}</span>、剩余时长和流量都不变。
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -235,7 +241,7 @@ export function AccessPanel({ sub }: { sub: Subscription }) {
           <span className="plate-note">
             {blockedSelf
               ? '当前状态不能自助更换，请联系客服'
-              : `24 小时内还可换 ${sub.quotas.accessChangesLeft} / ${sub.quotas.accessChangesPerDay} 次 · 只换接入，出口与余量不变`}
+              : `24 小时内还可换 ${sub.quotas.accessChangesLeft} / ${sub.quotas.accessChangesPerDay} 次 · 只换接入，${sub.kind === 'direct' ? '直出线路不变' : '出口与余量不变'}`}
           </span>
         </div>
       </div>

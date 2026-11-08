@@ -1,10 +1,11 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
+import { isIsp } from '@isp/api-client'
 import { createMockApi } from '@isp/api-client/mock'
 import { SimCard } from './SimCard'
 
-const subs = await createMockApi({ latency: [0, 0] }).listSubscriptions()
+const subs = (await createMockApi({ latency: [0, 0] }).listSubscriptions()).filter(isIsp)
 const byId = (id: string) => subs.find((s) => s.id === id)!
 
 function renderCard(id: string) {

@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import type { ExitReason, Subscription } from '@isp/api-client'
 import { api, errorText, qk } from '../app/api'
-import { ApiError, type ExitRequest } from '@isp/api-client'
+import { ApiError, type ExitRequest, type IspSubscription } from '@isp/api-client'
 import { fmtAgo, fmtDate, fmtDay } from '../lib/format'
 import { useIntentKey } from '../lib/intent'
 import { EXIT_CHECK, EXIT_REASON, EXIT_REQUEST } from '../lib/status'
@@ -116,7 +116,7 @@ function CreateError({ error }: { error: unknown }) {
 }
 
 /** 出口分区：实测地址、检测结果、换出口申请。 */
-export function ExitPanel({ sub }: { sub: Subscription }) {
+export function ExitPanel({ sub }: { sub: IspSubscription }) {
   const [open, setOpen] = useState(false)
   const requests = useQuery({ queryKey: qk.requests, queryFn: () => api.listExitRequests(), enabled: !!sub.openExitRequestId })
   const openReq = requests.data?.find((r) => r.id === sub.openExitRequestId)

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Result, Segmented, Skeleton, Button } from 'antd'
 import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
-import { remainingBytes, type OrderInput } from '@isp/api-client'
+import { isIsp, remainingBytes, type OrderInput } from '@isp/api-client'
 import { api, errorText, qk } from '../app/api'
 import { useTitle } from '../app/Shell'
 import { useIntentKey } from '../lib/intent'
@@ -50,6 +50,17 @@ export default function RenewPage() {
     )
   }
   const s = sub.data
+  if (!isIsp(s)) {
+    // 服务器直出代理（D-25）跟随付费 IP 有效且不限流量，没有续购入口。
+    return (
+      <Result
+        status="info"
+        title="服务器直出代理不需要续购"
+        subTitle="它跟随你的付费 IP 有效、不限流量；续你的付费 IP 即可延长。"
+        extra={<Button onClick={() => navigate(`/ips/${id}`)}>返回详情</Button>}
+      />
+    )
+  }
   const c = catalog.data
   // 续时长按该地区当前上架套餐的价格估算；最终金额以服务端生成的订单为准。
   const plan = c.plans.find((p) => p.countryCode === s.plan.countryCode && p.city === s.plan.city)

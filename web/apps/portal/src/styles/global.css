@@ -249,6 +249,28 @@
   font-weight: 500;
   color: var(--ink-3);
 }
+/* 服务器直出（D-25）：卡面没有出口 IP，印出站方式；左上角是单色直出标记而不是国旗（The Flag Identity Rule）。 */
+.direct-mark {
+  color: var(--ink-2);
+}
+.direct-face {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--ink);
+}
+.direct-face.muted {
+  color: var(--ink-3);
+}
+.direct-row .meter-read {
+  color: var(--ink-3);
+}
+.direct-row .meter-read b {
+  color: var(--ink);
+}
+.direct-row.tone-stop .meter-read b {
+  color: var(--stop);
+}
 .exit-meta {
   margin-top: 4px;
   color: var(--ink-3);

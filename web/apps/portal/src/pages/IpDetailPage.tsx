@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Input, Result, Segmented, Skeleton } from 'antd'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import type { Subscription, SubscriptionEvent, SubscriptionEventKind } from '@isp/api-client'
+import { isDirect, isIsp, type Subscription, type SubscriptionEvent, type SubscriptionEventKind } from '@isp/api-client'
 import { POLL_MS, api, errorText, qk } from '../app/api'
 import { useTitle } from '../app/Shell'
 import { AccessPanel } from '../components/AccessPanel'
@@ -12,10 +12,11 @@ import { ExitPanel } from '../components/ExitPanel'
 import { CountryFlag, StateMark } from '@isp/ui'
 import { Plate } from '@isp/ui'
 import { ExitFace, StateCell, serial } from '../components/SimCard'
+import { DirectDetail } from '../components/DirectDetail'
 import { fmtDate } from '../lib/format'
 import { blockerLabel, blockerText, remedyFor } from '../lib/status'
 
-function Rename({ sub }: { sub: Subscription }) {
+export function Rename({ sub }: { sub: Subscription }) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(sub.name)
   const qc = useQueryClient()
@@ -85,7 +86,7 @@ const EVENT_LABEL: Record<SubscriptionEventKind, string> = {
 const BENEFIT: SubscriptionEventKind[] = ['ready', 'time_added', 'traffic_added', 'expired', 'exhausted']
 const CHANGE: SubscriptionEventKind[] = ['password_reset', 'access_changed', 'exit_changed']
 
-function History({ sub }: { sub: Subscription }) {
+export function History({ sub }: { sub: Subscription }) {
   const [filter, setFilter] = useState<'all' | 'benefit' | 'change'>('all')
   const events = useQuery({ queryKey: qk.events(sub.id), queryFn: () => api.listSubscriptionEvents(sub.id) })
   const shown = (events.data ?? []).filter((e: SubscriptionEvent) =>
@@ -138,7 +139,7 @@ function History({ sub }: { sub: Subscription }) {
   )
 }
 
-function Blockers({ sub }: { sub: Subscription }) {
+export function Blockers({ sub }: { sub: Subscription }) {
   const navigate = useNavigate()
   if (sub.blockers.length === 0) return null
   return (
@@ -200,6 +201,8 @@ export default function IpDetailPage() {
     )
   }
   const sub = q.data
+  if (isDirect(sub)) return <DirectDetail sub={sub} />
+  if (!isIsp(sub)) return null
   const canBuy = sub.lifecycle !== 'pending' && sub.lifecycle !== 'fulfill_failed'
 
   return (
