@@ -659,6 +659,7 @@ paths:
         - {name: q, in: query, description: 按订阅 ID、名称、用户邮箱、接入用户名或出口 IP 搜索, schema: {type: string}}
         - {name: userId, in: query, schema: {type: string}}
         - {name: nodeId, in: query, schema: {type: string}}
+        - {name: kind, in: query, description: 订阅类型, schema: {$ref: '#/components/schemas/SubscriptionKind'}}
         - name: lifecycle
           in: query
           style: form
@@ -1715,6 +1716,53 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
+  /admin-api/users/{userId}/direct-proxy:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    put:
+      operationId: adminGrantDirect
+      tags: [admin-users]
+      summary: 赠送服务器直出代理（或调整带宽上限）
+      description: |
+        D-25（docs/06 §9.2）。用户没有直出代理时新建一个直出订阅（每用户最多一个）：签发接入（三个端口与凭据）、
+        经节点本机出站，只限带宽不限流量，可用截止跟随该用户时长有效的 ISP 订阅（没有则阻断原因 no_paid_subscription）。
+        已有时只调整带宽上限（幂等）；开通失败的重新开通。带宽未填取 `core.direct_default_bandwidth_mbps`，
+        并发上限取 `core.direct_max_connections`。审计 direct.grant / direct.update / direct.retry。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AdminDirectGrantInput'}
+      responses:
+        '200':
+          description: 直出订阅
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminSubscriptionDetail'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/Precondition'}
+        '422': {$ref: '#/components/responses/Invalid'}
+    delete:
+      operationId: adminRevokeDirect
+      tags: [admin-users]
+      summary: 收回服务器直出代理
+      description: 中止进行中的开通或换接入，撤销凭据，端口进入冷却，直出订阅删除。没有直出代理时同样返回 204。审计 direct.revoke。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - {name: reason, in: query, description: 收回原因（可选，不超过 200 字）, schema: {type: string, maxLength: 200}}
+      responses:
+        '204': {description: 已收回}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Invalid'}
 
   # ==========================================================================
   # 管理端：订单与账务
@@ -2508,8 +2556,11 @@ components:
       description: 订阅生命周期（R-18 状态图；已删除的订阅不出现在用户视图）
     Blocker:
       type: string
-      enum: [account_banned, released, admin_paused, pending, fulfill_failed, expired, traffic_exhausted, changing, dataplane]
-      description: 阻断原因。数组按 docs/01 §7.2 展示优先级排序（即本枚举顺序）；空数组表示可用。
+      enum: [account_banned, released, admin_paused, pending, fulfill_failed, expired, no_paid_subscription, traffic_exhausted,
+             changing, dataplane]
+      description: |
+        阻断原因。数组按 docs/01 §7.2 展示优先级排序（即本枚举顺序）；空数组表示可用。
+        no_paid_subscription 只出现在直出订阅（D-25）：该用户没有时长有效的 ISP 订阅。直出订阅不会出现 expired 与 traffic_exhausted。
     ExitCheck:
       type: string
       enum: [ok, slow, failed, stale]
@@ -2576,13 +2627,38 @@ components:
         accessChangesPerDay: {type: integer}
         freeExitChangesLeft: {type: integer, minimum: 0}
         freeExitWindowEndsAt: {type: [string, 'null'], format: date-time, description: 免费次数恢复时间（已用完时）}
+    SubscriptionKind:
+      type: string
+      enum: [isp, direct]
+      description: 订阅类型：isp 经 ISP 上游出站；direct 是管理员赠送的服务器直出代理（D-25），经中转服务器自身地址出站
+    SubscriptionDirect:
+      type: object
+      description: 直出代理（D-25）：只限带宽不限流量，可用截止跟随付费订阅
+      required: [bandwidthMbps, maxConnections, paidUntil]
+      properties:
+        bandwidthMbps: {type: integer, minimum: 1, description: 带宽上限}
+        maxConnections: {type: integer, minimum: 1, description: 并发连接上限}
+        paidUntil:
+          type: [string, 'null']
+          format: date-time
+          description: 可用截止 = 该用户时长有效（已开始、未到期、未删除）的 ISP 订阅中最晚的到期时间；没有时为 null（阻断原因 no_paid_subscription）
     Subscription:
       type: object
-      required: [id, name, plan, lifecycle, blockers, time, traffic, exit, access, quotas, openExitRequestId, openOrderIds]
+      required: [id, name, kind, plan, direct, lifecycle, blockers, time, traffic, exit, access, quotas, openExitRequestId, openOrderIds]
       properties:
         id: {type: string}
         name: {type: string}
-        plan: {$ref: '#/components/schemas/SubscriptionPlan'}
+        kind: {$ref: '#/components/schemas/SubscriptionKind'}
+        plan:
+          description: 套餐快照；直出订阅为 null
+          oneOf:
+            - {$ref: '#/components/schemas/SubscriptionPlan'}
+            - {type: 'null'}
+        direct:
+          description: 直出代理信息；ISP 订阅为 null。直出订阅的 time.expiresAt 即 paidUntil，traffic.totalBytes 为 0（不限流量），usedBytes 为累计用量，exit 恒为 null
+          oneOf:
+            - {$ref: '#/components/schemas/SubscriptionDirect'}
+            - {type: 'null'}
         lifecycle: {$ref: '#/components/schemas/Lifecycle'}
         blockers:
           type: array
@@ -2975,25 +3051,36 @@ components:
     AccessState:
       type: string
       enum: [pending, active, revoked, failed]
+    AdminSubscriptionPlan:
+      allOf:
+        - {$ref: '#/components/schemas/SubscriptionPlan'}
+        - type: object
+          required: [planId, planVersionId, planVersion]
+          properties:
+            planId: {type: string}
+            planVersionId: {type: string}
+            planVersion: {type: integer}
     AdminSubscription:
       type: object
-      required: [id, name, user, nodeId, plan, lifecycle, blockers, adminPaused, pausedReason, time, traffic, exit, access,
-                 activeConns, usageReportedAt, desiredVersion, appliedVersion, activeTaskId, openExitRequestId, openOrderIds,
-                 createdAt]
+      required: [id, name, kind, user, nodeId, plan, direct, lifecycle, blockers, adminPaused, pausedReason, time, traffic, exit,
+                 access, activeConns, usageReportedAt, desiredVersion, appliedVersion, activeTaskId, openExitRequestId,
+                 openOrderIds, createdAt]
       properties:
         id: {type: string}
         name: {type: string}
+        kind: {$ref: '#/components/schemas/SubscriptionKind'}
         user: {$ref: '#/components/schemas/UserRef'}
         nodeId: {type: [string, 'null']}
         plan:
-          allOf:
-            - {$ref: '#/components/schemas/SubscriptionPlan'}
-            - type: object
-              required: [planId, planVersionId, planVersion]
-              properties:
-                planId: {type: string}
-                planVersionId: {type: string}
-                planVersion: {type: integer}
+          description: 套餐快照；直出订阅为 null
+          oneOf:
+            - {$ref: '#/components/schemas/AdminSubscriptionPlan'}
+            - {type: 'null'}
+        direct:
+          description: 直出代理信息；ISP 订阅为 null
+          oneOf:
+            - {$ref: '#/components/schemas/SubscriptionDirect'}
+            - {type: 'null'}
         lifecycle: {$ref: '#/components/schemas/AdminLifecycle'}
         blockers:
           type: array
@@ -3183,7 +3270,8 @@ components:
         reason: {type: string, minLength: 1, maxLength: 500}
     TaskKind:
       type: string
-      enum: [access_change, password_reset, exit_change, combined, fulfill]
+      enum: [access_change, password_reset, exit_change, combined, fulfill, direct_grant]
+      description: direct_grant 是赠送直出代理（D-25）：签发首个接入并等节点应用
     TaskState:
       type: string
       enum: [queued, running, succeeded, failed, cancelled]
@@ -3602,7 +3690,7 @@ components:
       allOf:
         - {$ref: '#/components/schemas/AdminUser'}
         - type: object
-          required: [subscriptions, recentOrders, activeSessions]
+          required: [subscriptions, recentOrders, activeSessions, direct]
           properties:
             subscriptions:
               type: array
@@ -3611,6 +3699,26 @@ components:
               type: array
               items: {$ref: '#/components/schemas/AdminOrder'}
             activeSessions: {type: integer}
+            direct: {$ref: '#/components/schemas/AdminUserDirect'}
+    AdminUserDirect:
+      type: object
+      description: 服务器直出代理赠送状态（D-25）。subscriptionId 为 null 表示未赠送
+      required: [subscriptionId, lifecycle, bandwidthMbps, defaultBandwidthMbps, maxConnections]
+      properties:
+        subscriptionId: {type: [string, 'null']}
+        lifecycle:
+          oneOf:
+            - {$ref: '#/components/schemas/Lifecycle'}
+            - {type: 'null'}
+        bandwidthMbps: {type: [integer, 'null'], description: 已赠送时的带宽上限}
+        defaultBandwidthMbps: {type: integer, description: 赠送时带宽的默认值（core.direct_default_bandwidth_mbps）}
+        maxConnections: {type: integer, description: 并发上限（core.direct_max_connections）}
+    AdminDirectGrantInput:
+      type: object
+      additionalProperties: false
+      properties:
+        bandwidthMbps: {type: integer, minimum: 1, maximum: 10000, description: 带宽上限（Mbps）；不填取默认值}
+        reason: {type: string, maxLength: 200}
     AdminUserPage:
       type: object
       required: [items, nextCursor]

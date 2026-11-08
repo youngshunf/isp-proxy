@@ -256,7 +256,7 @@ func TestBlockerOrderMatchesDisplayPriority(t *testing.T) {
 	b := deref(t, doc, map[string]any{"$ref": "#/components/schemas/Blocker"})
 	got := fmt.Sprint(b["enum"])
 	// docs/01 §7.2：封禁 > 已释放 > 暂停 > 待履约/履约异常 > 到期 > 耗尽 > 变更中 > 数据面异常。
-	want := "[account_banned released admin_paused pending fulfill_failed expired traffic_exhausted changing dataplane]"
+	want := "[account_banned released admin_paused pending fulfill_failed expired no_paid_subscription traffic_exhausted changing dataplane]"
 	if got != want {
 		t.Fatalf("Blocker 枚举顺序即展示优先级\n得到 %s\n应为 %s", got, want)
 	}

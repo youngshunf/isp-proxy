@@ -44,7 +44,7 @@ func wireCore(d *Deps) (coreParts, error) {
 	return coreParts{
 		domains: domains,
 		adminHooks: admin.Hooks{UserStatusChanged: c.UserStatusChanged, UserSubscriptions: c.UserSubscriptions,
-			UserRecentOrders: c.UserRecentOrders},
+			UserRecentOrders: c.UserRecentOrders, UserDirect: c.UserDirect},
 		agent:      c.AgentServer(),
 		hub:        c.Hub(),
 		background: []func(ctx context.Context){c.RunScheduler},

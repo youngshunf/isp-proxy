@@ -136,17 +136,21 @@ func (s *Service) Create(ctx context.Context, tx *kernel.Tx, userID string, in I
 	if len([]rune(in.Note)) > 200 {
 		return nil, nil, httpx.Invalid("备注不超过 200 字")
 	}
-	var owner, lifecycle, rulesVersion, userStatus string
+	var owner, lifecycle, rulesVersion, userStatus, kind string
 	var paused bool
 	var curAccess, curExit *string
-	err := tx.QueryRow(ctx, `SELECT s.user_id, s.lifecycle, s.rules_version, s.admin_paused, s.current_access_id, s.current_exit_id, u.status
+	err := tx.QueryRow(ctx, `SELECT s.user_id, s.lifecycle, s.rules_version, s.admin_paused, s.current_access_id, s.current_exit_id, u.status,
+	                            s.kind
 	                          FROM subscriptions s JOIN users u ON u.id = s.user_id WHERE s.id = $1 FOR UPDATE OF s`, in.SubscriptionID).
-		Scan(&owner, &lifecycle, &rulesVersion, &paused, &curAccess, &curExit, &userStatus)
+		Scan(&owner, &lifecycle, &rulesVersion, &paused, &curAccess, &curExit, &userStatus, &kind)
 	if kernel.IsNoRows(err) || (err == nil && (owner != userID || lifecycle == "deleted")) {
 		return nil, nil, httpx.NotFound("没有找到这个订阅")
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if kind == "direct" {
+		return nil, nil, httpx.Precondition("直出代理经中转服务器直接出站，没有出口可换")
 	}
 	var existing string
 	if err := tx.QueryRow(ctx, `SELECT id FROM exit_requests WHERE subscription_id = $1 AND status IN ('pending', 'processing')`,

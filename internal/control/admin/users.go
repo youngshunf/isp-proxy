@@ -44,6 +44,7 @@ type UserDetail struct {
 	User
 	Subscriptions  any `json:"subscriptions"`
 	RecentOrders   any `json:"recentOrders"`
+	Direct         any `json:"direct"`
 	ActiveSessions int `json:"activeSessions"`
 }
 
@@ -208,6 +209,12 @@ func (s *Service) handleGetUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if f := s.cfg.Hooks.UserRecentOrders; f != nil {
 		if d.RecentOrders, err = f(ctx, id); err != nil {
+			httpx.WriteError(w, r, err)
+			return
+		}
+	}
+	if f := s.cfg.Hooks.UserDirect; f != nil {
+		if d.Direct, err = f(ctx, id); err != nil {
 			httpx.WriteError(w, r, err)
 			return
 		}

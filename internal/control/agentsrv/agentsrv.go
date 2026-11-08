@@ -9,6 +9,9 @@
 //   - used_floor = 已入库的累计已用（节点恢复后以此为下限，GREATEST 合并，A-22）；
 //   - max_conns / bandwidth_bps 取订阅首购时的套餐版本；
 //   - 接入、出口取“待生效优先，否则当前”：组合更换时新接入直接绑定新出口（R-11.6）。
+//   - 直出订阅（D-25，docs/06 §9.2）显式标记 direct 与 unmetered，没有出口；expires_at = 该用户时长有效（已开始、
+//     未删除）的 ISP 订阅中最晚的到期时间，没有则不启用（no_paid_subscription）；max_conns / bandwidth_bps 取订阅行上
+//     的直出上限。ISP 订阅缺出口时仍 enabled = false、exit 为空（失败即拒绝），绝不标记 direct（R-01.3）。
 //
 // 用量摄入：累计值只增不减（GREATEST），已应用版本只增不减；节点回报的已应用版本高于期望版本（控制面从备份恢复）
 // 时把期望版本抬到已应用 + 1，避免节点忽略新的期望状态（A-03、A-10）。
@@ -41,15 +44,17 @@ func New(env *kernel.Env, tasks *task.Service, probes *probe.Service) *Server {
 
 var _ agentproto.Server = (*Server)(nil)
 
-const desiredSQL = `SELECT s.id, s.desired_version, s.entitled_bytes_total, s.expires_at, s.used_bytes_total, pv.concurrency, pv.bandwidth_mbps,
+const desiredSQL = `SELECT s.id, s.kind = 'direct', s.desired_version, s.entitled_bytes_total,
+	CASE WHEN s.kind = 'direct' THEN (` + kernel.PaidUntilSQL + `) ELSE s.expires_at END,
+	s.used_bytes_total, COALESCE(pv.concurrency, s.direct_max_conns), COALESCE(pv.bandwidth_mbps, s.direct_bandwidth_mbps),
 	(u.status = 'active' AND NOT s.admin_paused AND s.lifecycle = 'active' AND s.current_access_id IS NOT NULL
-	 AND s.current_exit_id IS NOT NULL AND n.status <> 'disabled') AS enabled,
+	 AND (s.current_exit_id IS NOT NULL OR s.kind = 'direct') AND n.status <> 'disabled') AS enabled,
 	a.version, a.username, a.password_enc, a.http_port, a.https_port, a.socks5_port,
 	b.version, r.protocol, r.host, r.port, r.username, r.password_enc
 	FROM subscriptions s
 	JOIN users u ON u.id = s.user_id
 	JOIN nodes n ON n.id = s.node_id
-	JOIN plan_versions pv ON pv.id = s.plan_version_id
+	LEFT JOIN plan_versions pv ON pv.id = s.plan_version_id
 	JOIN LATERAL (SELECT * FROM access_versions x WHERE x.subscription_id = s.id
 	                AND (x.state = 'pending' OR x.id = s.current_access_id) ORDER BY (x.state = 'pending') DESC LIMIT 1) a ON true
 	LEFT JOIN LATERAL (SELECT * FROM exit_bindings x WHERE x.subscription_id = s.id
@@ -84,6 +89,7 @@ func (s *Server) Desired(ctx context.Context, nodeID string) (*agentproto.Desire
 	defer rows.Close()
 	for rows.Next() {
 		var e agentproto.SubscriptionEntry
+		var direct bool
 		var version, entitled, used int64
 		var expires *time.Time
 		var bw int64
@@ -94,7 +100,7 @@ func (s *Server) Desired(ctx context.Context, nodeID string) (*agentproto.Desire
 		var proto, host, user *string
 		var port *int
 		var exEnc []byte
-		if err := rows.Scan(&e.ID, &version, &entitled, &expires, &used, &e.MaxConns, &bw, &e.Enabled, &accV, &a.Username, &pwEnc,
+		if err := rows.Scan(&e.ID, &direct, &version, &entitled, &expires, &used, &e.MaxConns, &bw, &e.Enabled, &accV, &a.Username, &pwEnc,
 			&a.Ports.HTTP, &a.Ports.HTTPS, &a.Ports.SOCKS5, &exV, &proto, &host, &port, &user, &exEnc); err != nil {
 			return nil, err
 		}
@@ -113,7 +119,10 @@ func (s *Server) Desired(ctx context.Context, nodeID string) (*agentproto.Desire
 			return nil, fmt.Errorf("解密接入密码 %s: %w", e.ID, err)
 		}
 		e.Access = a
-		if exV != nil && proto != nil {
+		if direct {
+			// 直出（D-25）：显式标记，经节点本机拨号；不限流量，额度字段不再有意义。
+			e.Direct, e.Unmetered, e.EntitledTotal = true, true, 0
+		} else if exV != nil && proto != nil {
 			x, err := inventory.ExitOf(s.env, *proto, *host, *port, kernel.StrOr(user, ""), exEnc, uint64(*exV))
 			if err != nil {
 				return nil, fmt.Errorf("解密上游密码 %s: %w", e.ID, err)

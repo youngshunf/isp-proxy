@@ -6,7 +6,7 @@
 //	c.AgentServer()    // agentproto.Server
 //	c.Hub()            // 唤醒长轮询节点
 //	c.RunScheduler(ctx) // 每 SchedulerInterval（默认 5 秒）执行一次 Tick，直到 ctx 结束
-//	c.AdminHooks()     // 封禁/解封、用户详情的订阅与订单（admin.Hooks 的三个字段）
+//	c.AdminHooks()     // 封禁/解封、用户详情的订阅与订单（admin.Hooks 的四个字段）
 package core
 
 import (
@@ -104,6 +104,11 @@ func (c *Core) UserSubscriptions(ctx context.Context, userID string) (any, error
 // UserRecentOrders 是 admin.Hooks.UserRecentOrders。
 func (c *Core) UserRecentOrders(ctx context.Context, userID string) (any, error) {
 	return c.Orders.UserRecentOrders(ctx, userID)
+}
+
+// UserDirect 是 admin.Hooks.UserDirect（D-25）。
+func (c *Core) UserDirect(ctx context.Context, userID string) (any, error) {
+	return c.Subscriptions.UserDirect(ctx, userID)
 }
 
 // RunScheduler 每 SchedulerInterval 执行一次 Tick，直到 ctx 结束。单步失败只记日志，不影响其他步骤与下一轮。

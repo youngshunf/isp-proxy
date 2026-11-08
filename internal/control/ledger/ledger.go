@@ -40,6 +40,17 @@ func Insert(ctx context.Context, tx *kernel.Tx, e Entry) (string, bool, error) {
 	if e.Amount == 0 {
 		return "", false, httpx.Invalid("入账数量不能为 0")
 	}
+	var kind string
+	if err := tx.QueryRow(ctx, `SELECT kind FROM subscriptions WHERE id = $1`, e.Sub).Scan(&kind); err != nil {
+		if kernel.IsNoRows(err) {
+			return "", false, httpx.NotFound("没有找到这个订阅")
+		}
+		return "", false, err
+	}
+	if kind == "direct" {
+		// 直出代理（D-25）不限流量、跟随付费订阅有效，没有时长与流量账本（库内触发器兜底）。
+		return "", false, httpx.Precondition("直出代理不限流量、跟随付费订阅有效，不能调整时长或流量")
+	}
 	if e.Kind == "time" {
 		if err := prepareTime(ctx, tx, e.Sub, e.Amount); err != nil {
 			return "", false, err

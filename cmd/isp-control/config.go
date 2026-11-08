@@ -93,6 +93,10 @@ type CoreConfig struct {
 	ExitCheckInterval time.Duration `yaml:"exit_check_interval"`
 	// NodeOfflineAfter 超过即视为节点离线（默认 30 秒）。
 	NodeOfflineAfter time.Duration `yaml:"node_offline_after"`
+	// DirectDefaultBandwidthMbps 是管理员赠送直出代理时未填带宽上限的默认值（D-25，默认 10 Mbps）。
+	DirectDefaultBandwidthMbps int `yaml:"direct_default_bandwidth_mbps"`
+	// DirectMaxConnections 是直出代理的并发连接上限（D-25，默认 64）。
+	DirectMaxConnections int `yaml:"direct_max_connections"`
 }
 
 // Kernel 转为 kernel.Config（Box 由 api.Assemble 填写）。
@@ -102,7 +106,8 @@ func (c CoreConfig) Kernel() kernel.Config {
 		geo = kernel.StaticGeo(c.ExitCountries)
 	}
 	return kernel.Config{EchoURL: c.EchoURL, Geo: geo, SchedulerInterval: c.SchedulerInterval, TaskTimeout: c.TaskTimeout,
-		ProbeTimeout: c.ProbeTimeout, ExitCheckInterval: c.ExitCheckInterval, NodeOfflineAfter: c.NodeOfflineAfter}
+		ProbeTimeout: c.ProbeTimeout, ExitCheckInterval: c.ExitCheckInterval, NodeOfflineAfter: c.NodeOfflineAfter,
+		DirectDefaultBandwidthMbps: c.DirectDefaultBandwidthMbps, DirectMaxConnections: c.DirectMaxConnections}
 }
 
 // DevConfig 是只用于开发与平台 E2E 的开关。

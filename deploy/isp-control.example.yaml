@@ -34,6 +34,9 @@ core:
   # probe_timeout: 1m          # 探测超时
   # exit_check_interval: 1h    # 定期出口检测间隔
   # node_offline_after: 1m     # 多久没有上报判为节点离线
+  # 服务器直出代理（D-25，管理员在用户详情赠送）：赠送时不填带宽上限的默认值与并发连接上限。
+  # direct_default_bandwidth_mbps: 10
+  # direct_max_connections: 64
 
 # 开发专用（只用于本机开发与平台 E2E，生产不得配置；配置后启动时打 WARN 日志）。
 # dev:
