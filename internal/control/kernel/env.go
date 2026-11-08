@@ -1,7 +1,7 @@
 // Package kernel 是控制面业务包共用的内核：运行环境（连接池、时钟、配置、节点唤醒、审计、邮件）、
 // 事务封装（提交后唤醒长轮询的节点）、期望状态版本提升、幂等键、分页游标、规则版本与订阅事件。
 //
-// 依赖方向：kernel ← ledger ← inventory ← alert/probe ← task ← subscription ← order/exitreq ← agentsrv ← core。
+// 依赖方向：kernel ← ledger ← alert ← inventory ← probe ← task ← subscription ← order/exitreq ← agentsrv ← core。
 // 任何影响节点期望状态的写入都必须在同一事务内调用 Tx.BumpSub / Tx.BumpNode（docs/06 §5）。
 package kernel
 
@@ -62,6 +62,8 @@ type Config struct {
 	ProbeTimeout time.Duration
 	// StockLowThreshold 是库存档位 low 的上限（docs/06 §8.1，默认 3）。
 	StockLowThreshold int
+	// SharedExitDefaultCapacity 是录入上游资源时未填绑定上限的默认值（D-24，docs/06 §9.1，默认 3）。
+	SharedExitDefaultCapacity int
 	// NodeOfflineAfter 超过即视为节点离线并告警。默认 30 秒。
 	NodeOfflineAfter time.Duration
 	// FreshWindow 内有上报视为数据新鲜（docs/06 §8.2，15 秒）。
@@ -113,6 +115,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.StockLowThreshold <= 0 {
 		c.StockLowThreshold = 3
+	}
+	if c.SharedExitDefaultCapacity <= 0 {
+		c.SharedExitDefaultCapacity = 3
 	}
 	if c.PortPoolLowRatio <= 0 {
 		c.PortPoolLowRatio = 0.1

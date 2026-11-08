@@ -93,6 +93,8 @@ type CoreConfig struct {
 	ExitCheckInterval time.Duration `yaml:"exit_check_interval"`
 	// NodeOfflineAfter 超过即视为节点离线（默认 30 秒）。
 	NodeOfflineAfter time.Duration `yaml:"node_offline_after"`
+	// SharedExitDefaultCapacity 是录入上游资源时不填绑定上限的默认值（D-24，默认 3）。
+	SharedExitDefaultCapacity int `yaml:"shared_exit_default_capacity"`
 }
 
 // Kernel 转为 kernel.Config（Box 由 api.Assemble 填写）。
@@ -102,7 +104,8 @@ func (c CoreConfig) Kernel() kernel.Config {
 		geo = kernel.StaticGeo(c.ExitCountries)
 	}
 	return kernel.Config{EchoURL: c.EchoURL, Geo: geo, SchedulerInterval: c.SchedulerInterval, TaskTimeout: c.TaskTimeout,
-		ProbeTimeout: c.ProbeTimeout, ExitCheckInterval: c.ExitCheckInterval, NodeOfflineAfter: c.NodeOfflineAfter}
+		ProbeTimeout: c.ProbeTimeout, ExitCheckInterval: c.ExitCheckInterval, NodeOfflineAfter: c.NodeOfflineAfter,
+		SharedExitDefaultCapacity: c.SharedExitDefaultCapacity}
 }
 
 // DevConfig 是只用于开发与平台 E2E 的开关。
