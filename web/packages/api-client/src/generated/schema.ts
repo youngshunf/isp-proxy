@@ -1012,7 +1012,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 上游资源详情（不含密码明文） */
+        /**
+         * 上游资源详情（不含密码明文）
+         * @description 另列受影响订阅（当前在该资源上有待生效或生效出口绑定的订阅，R-11.10、D-24）。
+         */
         get: operations["adminGetUpstream"];
         put?: never;
         post?: never;
@@ -1022,7 +1025,8 @@ export interface paths {
         /**
          * 修改上游资源
          * @description 带 rowVersion 乐观锁，过期返回 409。修改连接信息（协议、主机、端口、凭据）会让资源回到 pending_verify；
-         *     已占用（bound）的资源不能改连接信息（412），需走换出口。
+         *     已占用（bound）的资源、有共享绑定或共享订单预留的资源不能改连接信息（412），需走换出口；改连接信息同时清除冷却名额。
+         *     maxTenants 不能低于当前共享占用，有共享占用时不能改为 1（412）。
          */
         patch: operations["adminUpdateUpstream"];
         trace?: never;
@@ -1041,7 +1045,9 @@ export interface paths {
         /**
          * 人工改变库存状态（上架、隔离、停用）
          * @description 允许的人工转换：pending_verify/cooldown/quarantine → available（要求最近一次验证通过）；任意非 bound → quarantine 或 retired。
-         *     reserved、bound、cooldown 由订单、任务与调度维护，不能人工设入。已占用资源要先换出口。
+         *     reserved、bound、cooldown 由订单、任务与调度维护，不能人工设入。独享已占用资源要先换出口。
+         *     共享资源可以带着订阅隔离或停用（开通、换出口进行中时 409）：为其上每个订阅各自产生告警，订单预留的名额取消，
+         *     管理员在资源详情的受影响订阅里逐个换出口（R-11.10）；重新上架时关闭这些告警。
          */
         post: operations["adminSetUpstreamStatus"];
         delete?: never;
@@ -1840,6 +1846,8 @@ export interface components {
          */
         ExitCheck: "ok" | "slow" | "failed" | "stale";
         Exit: {
+            /** @description 共享出口“最多 N 人共用”（所分配资源的绑定上限）；独享为 null。不提供当前人数，也不提供同出口其他订阅的任何信息 */
+            sharedCapacity: number | null;
             version: number;
             /** @description 实际出口 IP（检测结果） */
             ip: string;
@@ -1866,6 +1874,8 @@ export interface components {
             unseenChanges: components["schemas"]["AccessField"][];
         };
         SubscriptionPlan: {
+            /** @description 购买时的出口类型（订单快照，套餐改动不追溯） */
+            exitMode: components["schemas"]["ExitMode"];
             name: string;
             countryCode: components["schemas"]["CountryCode"];
             country: string;
@@ -1966,12 +1976,21 @@ export interface components {
              */
             mode: "password" | "ports_and_password";
         };
-        /** @enum {string} */
+        /**
+         * @description 库存档位。独享套餐按空闲资源数，共享套餐按剩余名额数（R-16.7）
+         * @enum {string}
+         */
         StockLevel: "plenty" | "low" | "out";
+        /**
+         * @description 出口类型：exclusive 独享（独占一个上游资源）；shared 共享（与其他共享订阅共用一个资源，人数不超过资源的绑定上限，D-24）
+         * @enum {string}
+         */
+        ExitMode: "exclusive" | "shared";
         Plan: {
             id: string;
             /** @description 当前价格版本，下单时可回传用于校验 */
             versionId: string;
+            exitMode: components["schemas"]["ExitMode"];
             countryCode: components["schemas"]["CountryCode"];
             country: string;
             city: string;
@@ -2235,6 +2254,9 @@ export interface components {
         AdminLifecycle: "pending" | "fulfill_failed" | "active" | "retained" | "released" | "deleted";
         /** @description 当前出口（含资源与供应商信息，只给管理端） */
         AdminExit: {
+            exitMode: components["schemas"]["ExitMode"];
+            /** @description 所在资源的绑定上限 */
+            maxTenants: number;
             bindingId: string;
             version: number;
             resourceId: string;
@@ -2503,6 +2525,7 @@ export interface components {
         ExitComparison: {
             currentIp: string | null;
             differsFromCurrent: boolean;
+            /** @description 独享订阅：候选 IP 不是任何其他订阅的出口；共享订阅：候选 IP 不是任何独享订阅的出口（D-24） */
             uniqueOnPlatform: boolean;
             countryMatches: boolean;
             /** @description 三项都为 true */
@@ -2618,7 +2641,14 @@ export interface components {
          * @enum {string}
          */
         UpstreamStatus: "pending_verify" | "available" | "reserved" | "bound" | "cooldown" | "quarantine" | "retired";
+        /**
+         * @description status 为展示状态：共享名额用满（占用 = 上限）时显示 bound，未满仍为 available（R-16.3）。
+         *     reserved*\/boundSubscriptionId/cooldownUntil 只描述独享占用；共享占用见 occupancy。
+         */
         Upstream: {
+            /** @description 绑定上限：最多同时给几个共享订阅使用；1 表示只给独享套餐（D-24） */
+            maxTenants: number;
+            occupancy: components["schemas"]["UpstreamOccupancy"];
             id: string;
             nodeId: string;
             /** @enum {string} */
@@ -2650,6 +2680,37 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        /** @description 资源当前的占用（名额模型，docs/06 §9.1） */
+        UpstreamOccupancy: {
+            /**
+             * @description none 空闲；exclusive 被独享订阅整份预留、占用或冷却；shared 有共享名额被占用
+             * @enum {string}
+             */
+            mode: "none" | "exclusive" | "shared";
+            /** @description 占用名额合计（共享为下面三项之和；独享为 1） */
+            used: number;
+            /** @description 待生效与生效的出口绑定（含换出口任务的待生效绑定） */
+            bound: number;
+            /** @description 未付款订单预留（独享另含换出口任务预留） */
+            reserved: number;
+            /** @description 冷却中的名额（换出口或释放后冷却期内不再分配） */
+            cooldown: number;
+        };
+        /** @description 资源上的一个订阅（受影响订阅清单，只给管理端） */
+        UpstreamTenant: {
+            subscriptionId: string;
+            name: string;
+            userId: string;
+            userEmail: string;
+            exitMode: components["schemas"]["ExitMode"];
+            /** @enum {string} */
+            bindingState: "pending" | "active";
+            lifecycle: components["schemas"]["AdminLifecycle"];
+        };
+        UpstreamDetail: components["schemas"]["Upstream"] & {
+            /** @description 受影响订阅：当前在该资源上有待生效或生效出口绑定的订阅（R-11.10） */
+            tenants: components["schemas"]["UpstreamTenant"][];
+        };
         UpstreamVerify: {
             /** Format: date-time */
             at: string;
@@ -2673,6 +2734,8 @@ export interface components {
             city: string;
             provider?: string;
             note?: string;
+            /** @description 绑定上限；不填取配置 core.shared_exit_default_capacity（默认 3） */
+            maxTenants?: number;
         };
         UpstreamPatch: {
             /** Format: int64 */
@@ -2689,6 +2752,8 @@ export interface components {
             city?: string;
             provider?: string;
             note?: string;
+            /** @description 不能低于当前共享占用；有共享占用时不能改为 1 */
+            maxTenants?: number;
         };
         UpstreamStatusInput: {
             /** @enum {string} */
@@ -2733,6 +2798,7 @@ export interface components {
             concurrency: number;
             bandwidthMbps: number;
         };
+        /** @description 独享套餐为可售资源、已预留、已占用的资源数；共享套餐为剩余名额、订单预留名额、待生效与生效的共享绑定数（D-24） */
         PlanStock: {
             available: number;
             reserved: number;
@@ -2742,6 +2808,7 @@ export interface components {
         AdminPlan: {
             id: string;
             code: string;
+            exitMode: components["schemas"]["ExitMode"];
             status: components["schemas"]["SaleStatus"];
             sortOrder: number;
             current: components["schemas"]["PlanVersion"];
@@ -2752,6 +2819,8 @@ export interface components {
         PlanCreateInput: {
             code: string;
             sortOrder?: number;
+            /** @description 不填为 exclusive；创建后不可改（要换出口类型请新建套餐），已下单的订单另有快照 */
+            exitMode?: components["schemas"]["ExitMode"];
             version: components["schemas"]["PlanVersionInput"];
         };
         TrafficPackVersion: {
@@ -4771,13 +4840,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 资源 */
+            /** @description 资源详情 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Upstream"];
+                    "application/json": components["schemas"]["UpstreamDetail"];
                 };
             };
             401: components["responses"]["Unauthorized"];

@@ -69,15 +69,17 @@ type sub struct {
 	UserBanned                                bool
 	FirstReadyAt                              *time.Time
 	CreatedFromOrder                          *string
+	ExitMode                                  string // exclusive / shared（D-24）；直出订阅恒为 exclusive，无出口绑定
 }
 
 func lockSub(ctx context.Context, tx *kernel.Tx, id string) (*sub, error) {
 	s := &sub{}
 	err := tx.QueryRow(ctx, `SELECT s.id, s.user_id, s.lifecycle, s.rules_version, s.kind, s.plan_version_id, s.node_id, s.admin_paused,
-	                            s.current_access_id, s.current_exit_id, u.status = 'banned', s.first_ready_at, s.created_from_order_id
+	                            s.current_access_id, s.current_exit_id, u.status = 'banned', s.first_ready_at, s.created_from_order_id,
+	                            s.exit_mode
 	                          FROM subscriptions s JOIN users u ON u.id = s.user_id WHERE s.id = $1 FOR UPDATE OF s`, id).Scan(
 		&s.ID, &s.UserID, &s.Lifecycle, &s.RulesVersion, &s.Kind, &s.PlanVersionID, &s.Node, &s.AdminPaused, &s.CurAccess, &s.CurExit,
-		&s.UserBanned, &s.FirstReadyAt, &s.CreatedFromOrder)
+		&s.UserBanned, &s.FirstReadyAt, &s.CreatedFromOrder, &s.ExitMode)
 	if kernel.IsNoRows(err) || (err == nil && s.Lifecycle == "deleted") {
 		return nil, httpx.NotFound("没有找到这个订阅")
 	}
@@ -211,6 +213,12 @@ func newBinding(ctx context.Context, tx *kernel.Tx, subID, resID string, verifie
 	if store.IsUniqueViolation(err, "exit_bindings_resource_live") {
 		return "", httpx.Conflict("该上游资源已被其他订阅使用")
 	}
+	if store.IsUniqueViolation(err, "exit_bindings_resource_sub_live") {
+		return "", httpx.Conflict("该订阅已在使用这个上游资源")
+	}
+	if inventory.IsTenancyViolation(err) {
+		return "", httpx.Conflict("该上游资源的共享名额已满，或与独享 / 共享的分配规则冲突")
+	}
 	if err != nil {
 		return "", err
 	}
@@ -266,7 +274,7 @@ func (s *Service) Fulfill(ctx context.Context, tx *kernel.Tx, subID string, o Fu
 		}
 		return "", s.markFulfillFailed(ctx, tx, subID, orderPtr, nil, f.code, f.reason)
 	}
-	resID, err := inventory.PickForFulfill(ctx, tx, orderPtr, o.ResourceID, country, city)
+	resID, err := inventory.PickForFulfill(ctx, tx, sb.ExitMode, orderPtr, o.ResourceID, country, city)
 	if errors.Is(err, inventory.ErrNoStock) {
 		return fail(fulfillFailure{"no_stock", "该地区暂无可分配的出口资源", inventory.ErrNoStock})
 	}
@@ -316,7 +324,7 @@ func (s *Service) Fulfill(ctx context.Context, tx *kernel.Tx, subID string, o Fu
 	if _, err := newBinding(ctx, tx, subID, resID, verifiedIP, verifiedCC, taskID); err != nil {
 		return "", err
 	}
-	if err := inventory.Bind(ctx, tx, resID, subID); err != nil {
+	if err := inventory.Bind(ctx, tx, sb.ExitMode, resID, subID); err != nil {
 		return "", err
 	}
 	if orderPtr != nil {
@@ -560,6 +568,10 @@ func (s *Service) ChangeExit(ctx context.Context, tx *kernel.Tx, subID string, i
 	if sb.Node == nil || resNode != *sb.Node {
 		return "", httpx.Precondition("候选资源不在该订阅所在的节点上")
 	}
+	// 共享订阅只能换到另一个有空位的共享资源，独享订阅不能换到有共享占用的资源（R-11.3、D-24）。
+	if err := inventory.CandidateError(ctx, tx, subID, in.ResourceID); err != nil {
+		return "", err
+	}
 	kind := "exit_change"
 	if in.AlsoChangeAccess {
 		kind = "combined"
@@ -569,7 +581,7 @@ func (s *Service) ChangeExit(ctx context.Context, tx *kernel.Tx, subID string, i
 	if err != nil {
 		return "", err
 	}
-	if err := inventory.ReserveForTask(ctx, tx, in.ResourceID, taskID, tx.Now().Add(2*s.env.Cfg.TaskTimeout)); err != nil {
+	if err := inventory.ReserveForTask(ctx, tx, sb.ExitMode, in.ResourceID, taskID, tx.Now().Add(2*s.env.Cfg.TaskTimeout)); err != nil {
 		return "", err
 	}
 	if _, err := newBinding(ctx, tx, subID, in.ResourceID, obsIP, obsCC, taskID); err != nil {
@@ -749,24 +761,24 @@ func (s *Service) succeed(ctx context.Context, tx *kernel.Tx, r *running) error 
 	}
 	var oldIP, newIP *string
 	if r.NewExit != nil {
-		// 先解除旧绑定（资源进入冷却）再启用新绑定：每订阅至多一个生效出口，每资源至多一个订阅。
+		// 先解除旧绑定（独享资源进入冷却；共享名额冷却，资源上其他订阅不受影响）再启用新绑定：
+		// 每订阅至多一个生效出口，独享资源至多一个订阅。
 		if curExit != nil && *curExit != *r.NewExit {
-			var oldRes string
 			if err := tx.QueryRow(ctx, `UPDATE exit_bindings SET state = 'unbound', unbound_at = $2, unbound_reason = 'replaced'
-			                             WHERE id = $1 RETURNING resource_id, COALESCE(host(check_ip), host(verified_ip))`,
-				*curExit, now).Scan(&oldRes, &oldIP); err != nil {
+			                             WHERE id = $1 RETURNING COALESCE(host(check_ip), host(verified_ip))`,
+				*curExit, now).Scan(&oldIP); err != nil {
 				return err
 			}
-			if err := inventory.Cooldown(ctx, tx, oldRes, resCool); err != nil {
+			if err := inventory.ReleaseBinding(ctx, tx, *curExit, resCool); err != nil {
 				return err
 			}
 		}
-		var newRes string
+		var newRes, mode string
 		if err := tx.QueryRow(ctx, `UPDATE exit_bindings SET state = 'active', bound_at = $2 WHERE id = $1
-		                             RETURNING resource_id, host(verified_ip)`, *r.NewExit, now).Scan(&newRes, &newIP); err != nil {
+		                             RETURNING resource_id, host(verified_ip), exit_mode`, *r.NewExit, now).Scan(&newRes, &newIP, &mode); err != nil {
 			return err
 		}
-		if err := inventory.Bind(ctx, tx, newRes, r.Sub); err != nil {
+		if err := inventory.Bind(ctx, tx, mode, newRes, r.Sub); err != nil {
 			return err
 		}
 	}
@@ -896,12 +908,11 @@ func (s *Service) fail(ctx context.Context, tx *kernel.Tx, r *running, code, rea
 		}
 	}
 	if r.NewExit != nil {
-		var res string
-		if err := tx.QueryRow(ctx, `UPDATE exit_bindings SET state = 'failed' WHERE id = $1 RETURNING resource_id`, *r.NewExit).Scan(&res); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE exit_bindings SET state = 'failed' WHERE id = $1`, *r.NewExit); err != nil {
 			return err
 		}
 		quarantine := code == agentproto.ApplyExitInvalid || code == CodeExitCheckFailed
-		if err := inventory.ReturnToStock(ctx, tx, res, quarantine, reason); err != nil {
+		if err := inventory.ReturnCandidate(ctx, tx, *r.NewExit, quarantine, reason); err != nil {
 			return err
 		}
 	}

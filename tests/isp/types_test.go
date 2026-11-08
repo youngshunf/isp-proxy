@@ -30,12 +30,18 @@ type Account struct {
 // ---- 用户视图：订阅 ----
 
 type Exit struct {
-	Version     int        `json:"version"`
-	IP          string     `json:"ip"`
-	CountryCode string     `json:"countryCode"`
-	Check       string     `json:"check"`
-	LatencyMs   *int       `json:"latencyMs"`
-	CheckedAt   *time.Time `json:"checkedAt"`
+	Version        int        `json:"version"`
+	IP             string     `json:"ip"`
+	CountryCode    string     `json:"countryCode"`
+	Check          string     `json:"check"`
+	LatencyMs      *int       `json:"latencyMs"`
+	CheckedAt      *time.Time `json:"checkedAt"`
+	SharedCapacity *int       `json:"sharedCapacity"`
+}
+
+type SubscriptionPlan struct {
+	Name     string `json:"name"`
+	ExitMode string `json:"exitMode"`
 }
 
 type Access struct {
@@ -138,6 +144,7 @@ type Plan struct {
 	IncludedBytes int64  `json:"includedBytes"`
 	Concurrency   int    `json:"concurrency"`
 	BandwidthMbps int    `json:"bandwidthMbps"`
+	ExitMode      string `json:"exitMode"`
 	Stock         string `json:"stock"`
 }
 
@@ -418,6 +425,20 @@ type Upstream struct {
 	Status     string  `json:"status"`
 	BoundSub   *string `json:"boundSubscriptionId"`
 	RowVersion int64   `json:"rowVersion"`
+	MaxTenants int     `json:"maxTenants"`
+	Occupancy  struct {
+		Mode     string `json:"mode"`
+		Used     int    `json:"used"`
+		Bound    int    `json:"bound"`
+		Reserved int    `json:"reserved"`
+		Cooldown int    `json:"cooldown"`
+	} `json:"occupancy"`
+	// Tenants 只在详情接口返回（受影响订阅）。
+	Tenants []struct {
+		SubscriptionID string `json:"subscriptionId"`
+		ExitMode       string `json:"exitMode"`
+		BindingState   string `json:"bindingState"`
+	} `json:"tenants"`
 	LastVerify *struct {
 		OK     bool    `json:"ok"`
 		ExitIP *string `json:"exitIp"`
@@ -436,6 +457,7 @@ type UpstreamInput struct {
 	Country     string `json:"country"`
 	City        string `json:"city"`
 	Provider    string `json:"provider"`
+	MaxTenants  *int   `json:"maxTenants,omitempty"`
 }
 
 type PlanVersionInput struct {
@@ -451,10 +473,11 @@ type PlanVersionInput struct {
 }
 
 type AdminPlan struct {
-	ID      string `json:"id"`
-	Code    string `json:"code"`
-	Status  string `json:"status"`
-	Current struct {
+	ID       string `json:"id"`
+	Code     string `json:"code"`
+	Status   string `json:"status"`
+	ExitMode string `json:"exitMode"`
+	Current  struct {
 		ID      string `json:"id"`
 		Version int    `json:"version"`
 		Price   Money  `json:"price"`
@@ -521,6 +544,7 @@ type Alert struct {
 	Message        string  `json:"message"`
 	NodeID         *string `json:"nodeId"`
 	SubscriptionID *string `json:"subscriptionId"`
+	ResourceID     *string `json:"resourceId"`
 	OrderID        *string `json:"orderId"`
 }
 

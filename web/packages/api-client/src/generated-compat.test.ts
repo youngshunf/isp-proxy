@@ -56,6 +56,7 @@ assert<Equal<S['FulfillmentStatus'], H.FulfillmentStatus>>()
 assert<Equal<S['ExitReason'], H.ExitReason>>()
 assert<Equal<S['ExitRequestStatus'], H.ExitRequestStatus>>()
 assert<Equal<S['StockLevel'], H.StockLevel>>()
+assert<Equal<S['ExitMode'], H.ExitMode>>()
 assert<Equal<S['AccessField'], H.AccessField>>()
 
 // 错误码：完全一致。

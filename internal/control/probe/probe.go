@@ -3,6 +3,9 @@
 // 需要从节点发起的检测作为期望状态的 probes 下发，agent 只报告观测到的出口 IP、国家、耗时与错误；
 // “与当前不同、平台内独占、国家符合”的比较由控制面在收到结果时计算并落库。探测直接经上游访问回显端点，
 // 不经过客户接入，因此不计入任何订阅的用量（R-05.5、A-15）。结果按探测 ID 幂等。
+//
+// “平台内独占”按出口类型判断（D-24）：独享订阅的候选 IP 不能是任何其他订阅的出口；共享订阅的候选 IP
+// 不能是任何独享订阅的出口，可以与其他共享订阅相同（同一共享资源上的订阅共用出口 IP）。
 package probe
 
 import (
@@ -103,6 +106,9 @@ func (s *Service) CreateCandidateCompare(ctx context.Context, tx *kernel.Tx, sub
 	}
 	if resNode != *node {
 		return "", httpx.Precondition("候选资源不在该订阅所在的节点上")
+	}
+	if err := inventory.CandidateError(ctx, tx, sub, res); err != nil {
+		return "", err
 	}
 	return s.insert(ctx, tx, *node, agentproto.ProbeCandidateCompare, &sub, &res, nil, admin)
 }
@@ -232,7 +238,8 @@ func (s *Service) ApplyResult(ctx context.Context, tx *kernel.Tx, node string, r
 			      NOT EXISTS (SELECT 1 FROM exit_bindings b WHERE b.id = s.current_exit_id
 			                   AND (b.verified_ip = $2::inet OR b.check_ip = $2::inet)),
 			      NOT EXISTS (SELECT 1 FROM exit_bindings b WHERE b.subscription_id <> s.id AND b.state IN ('pending', 'active')
-			                   AND (b.verified_ip = $2::inet OR b.check_ip = $2::inet)),
+			                   AND (b.verified_ip = $2::inet OR b.check_ip = $2::inet)
+			                   AND (s.exit_mode = 'exclusive' OR b.exit_mode = 'exclusive')),
 			      COALESCE(v.country_code = $3, false)
 			    FROM subscriptions s JOIN plan_versions v ON v.id = s.plan_version_id WHERE s.id = $1`,
 				*sub, *ip, cc).Scan(&differs, &unique, &country); err != nil {

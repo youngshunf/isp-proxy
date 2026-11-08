@@ -5,6 +5,8 @@
 //   - 账本只追加：赠送/补偿必须为正，扣回不能让合计为负；划转只限同一用户、来源须有剩余。
 //   - 换出口：候选须为可售/待验证且未被占用；提交须引用该订阅该资源最近一次通过的比较探测；每订阅同一时刻只有一个进行中任务。
 //   - 上游状态只允许规定的人工转换；修改连接信息回到待验证，已占用的资源不能改连接信息。
+//   - 共享出口（D-24）：共享订阅只分到绑定上限 ≥2、没有独享占用且有空位的资源（人数最少优先）；独享订阅不分到有共享占用的
+//     资源；共享订阅离开后名额冷却 7 天；隔离/停用共享资源时为其上每个订阅各开一条告警。
 //   - 幂等键：同一键同一请求体返回首次结果，请求体不同 409。
 // 任务与探测按“被查询的次数”推进（jobSteps），不依赖真实时间，测试可控。
 import { ApiError, type ApiErrorCode } from '../../index'
@@ -30,6 +32,9 @@ import type {
   Probe,
   Task,
   Upstream,
+  UpstreamDetail,
+  UpstreamOccupancy,
+  UpstreamTenant,
   UsagePoint,
   UsageSeries,
 } from '../types'
@@ -196,6 +201,68 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
   const findReq = (id: string) => db.exitRequests.find((r) => r.id === id) ?? fail('not_found', '没有找到这个申请')
   const userOf = (s: SubRow) => db.users.find((u) => u.id === s.userId)!
 
+  // ---------------------------------------------------------------- 共享出口（D-24，docs/04 §7.6）
+  /** 资源上生效的共享订阅。 */
+  const sharedSubsOn = (r: UpstreamRow) =>
+    db.subs.filter((s) => s.exit?.resourceId === r.u.id && s.exit.exitMode === 'shared' && s.lifecycle !== 'deleted' && s.lifecycle !== 'released')
+  /** 资源占用：共享 = 生效共享绑定 + 进行中的开通/换出口 + 冷却名额；独享沿用资源状态。 */
+  const occ = (r: UpstreamRow): UpstreamOccupancy => {
+    const bound = sharedSubsOn(r).length
+    const reserved = r.pendingShared?.length ?? 0
+    const cooldown = (r.cooldownSlots ?? []).filter((t) => t > now).length
+    if (bound + reserved + cooldown > 0) return { mode: 'shared', used: bound + reserved + cooldown, bound, reserved, cooldown }
+    const st = r.u.status
+    if (st === 'reserved' || st === 'bound' || st === 'cooldown')
+      return { mode: 'exclusive', used: 1, bound: st === 'bound' ? 1 : 0, reserved: st === 'reserved' ? 1 : 0, cooldown: st === 'cooldown' ? 1 : 0 }
+    return { mode: 'none', used: 0, bound: 0, reserved: 0, cooldown: 0 }
+  }
+  /** 对外视图：共享名额满时显示为 bound（库存状态本身仍是 available）。 */
+  const upView = (r: UpstreamRow): Upstream => {
+    const o = occ(r)
+    const status = o.mode === 'shared' && o.used >= r.u.maxTenants && r.u.status === 'available' ? 'bound' : r.u.status
+    return { ...r.u, occupancy: o, status }
+  }
+  const sharedFree = (r: UpstreamRow) => {
+    const o = occ(r)
+    return r.u.maxTenants >= 2 && o.mode !== 'exclusive' && o.used < r.u.maxTenants
+  }
+  const tenantsOf = (r: UpstreamRow): UpstreamTenant[] => {
+    const row = (s: SubRow, bindingState: UpstreamTenant['bindingState']): UpstreamTenant => {
+      const u = userOf(s)
+      return { subscriptionId: s.id, name: s.name, userId: u.id, userEmail: u.email, exitMode: s.plan.exitMode, bindingState, lifecycle: s.lifecycle }
+    }
+    const out = sharedSubsOn(r).map((s) => row(s, 'active'))
+    for (const id of r.pendingShared ?? []) {
+      const s = db.subs.find((x) => x.id === id)
+      if (s) out.push(row(s, 'pending'))
+    }
+    if (r.u.boundSubscriptionId) {
+      const s = db.subs.find((x) => x.id === r.u.boundSubscriptionId)
+      if (s) out.push(row(s, 'active'))
+    }
+    return out
+  }
+  const dropPending = (r: UpstreamRow, subId: string) => {
+    r.pendingShared = (r.pendingShared ?? []).filter((x) => x !== subId)
+  }
+  /** 隔离/停用共享资源：其上每个订阅各一条告警；重新上架时关闭。 */
+  const sharedDownAlerts = (r: UpstreamRow, status: string, reason: string) => {
+    for (const t of tenantsOf(r).filter((x) => x.exitMode === 'shared')) {
+      if (db.alerts.some((a) => a.status !== 'resolved' && a.resourceId === r.u.id && a.subscriptionId === t.subscriptionId)) continue
+      db.alerts.unshift({
+        id: nextId('alt'), kind: 'upstream_error', severity: 'critical', status: 'open',
+        message: `共享出口 ${r.u.host}:${r.u.port} 已${status === 'retired' ? '停用' : '隔离'}，订阅“${t.name}”需要换出口：${reason}`,
+        details: { exitMode: 'shared', status }, nodeId: r.u.nodeId, subscriptionId: t.subscriptionId, resourceId: r.u.id, orderId: null, taskId: null,
+        occurrences: 1, firstSeenAt: iso(now), lastSeenAt: iso(now), ackedBy: null, ackedAt: null, ackNote: null, resolvedAt: null,
+      })
+    }
+  }
+  const resolveSharedAlerts = (resourceId: string, subId?: string) => {
+    for (const a of db.alerts)
+      if (a.kind === 'upstream_error' && a.resourceId === resourceId && a.status !== 'resolved' && a.subscriptionId && (!subId || a.subscriptionId === subId))
+        Object.assign(a, { status: 'resolved', resolvedAt: iso(now) })
+  }
+
   // ---------------------------------------------------------------- 推导
   const sums = (subId: string) => {
     let bytes = 0
@@ -320,9 +387,20 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
     lastLoginAt: u.lastLoginAt,
   })
 
-  const planStock = (cc: string, city: string) => {
+  const planStock = (cc: string, city: string, mode: Db['plans'][number]['exitMode']) => {
     const rs = db.upstreams.filter((r) => r.u.countryCode === cc && r.u.city === city)
-    const available = rs.filter((r) => r.u.status === 'available').length
+    if (mode === 'shared') {
+      // 共享：剩余名额 / 订单预留 / 生效共享绑定（docs/06 §9.1）。
+      const sh = rs.filter((r) => r.u.status === 'available' && r.u.maxTenants >= 2 && occ(r).mode !== 'exclusive')
+      const available = sh.reduce((n, r) => n + Math.max(0, r.u.maxTenants - occ(r).used), 0)
+      return {
+        available,
+        reserved: sh.reduce((n, r) => n + occ(r).reserved, 0),
+        bound: sh.reduce((n, r) => n + occ(r).bound, 0),
+        level: available === 0 ? ('out' as const) : available <= 3 ? ('low' as const) : ('plenty' as const),
+      }
+    }
+    const available = rs.filter((r) => r.u.status === 'available' && occ(r).mode === 'none').length
     return {
       available,
       reserved: rs.filter((r) => r.u.status === 'reserved').length,
@@ -335,10 +413,11 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
     return {
       id: p.id,
       code: p.code,
+      exitMode: p.exitMode,
       status: p.status,
       sortOrder: p.sortOrder,
       current,
-      stock: planStock(current.countryCode, current.city),
+      stock: planStock(current.countryCode, current.city, p.exitMode),
       versions: all ? p.versions : [current],
     }
   }
@@ -595,7 +674,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
       name: o.name,
       userId: o.userId,
       nodeId: o.nodeId ?? null,
-      plan: { planId: plan.id, planVersionId: pv.id, planVersion: pv.version, name: pv.name, countryCode: pv.countryCode, country: pv.country, city: pv.city, concurrency: pv.concurrency, bandwidthMbps: pv.bandwidthMbps },
+      plan: { planId: plan.id, planVersionId: pv.id, planVersion: pv.version, name: pv.name, exitMode: plan.exitMode, countryCode: pv.countryCode, country: pv.country, city: pv.city, concurrency: pv.concurrency, bandwidthMbps: pv.bandwidthMbps },
       lifecycle: 'pending',
       lifecycleReason: null,
       adminPaused: false,
@@ -628,16 +707,34 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
     }
   }
 
+  /** 换出口候选的出口类型规则：共享只换到有空位的共享资源；独享不换到有共享占用的资源。 */
+  const candidateRule = (s: SubRow, r: UpstreamRow) => {
+    const o = occ(r)
+    if (s.plan.exitMode === 'shared') {
+      if (r.u.maxTenants < 2) fail('conflict', '共享订阅不能换到绑定上限为 1 的资源（独享出口）')
+      if (o.mode === 'exclusive') fail('conflict', '候选资源已被独享订阅占用，共享订阅不能换过去')
+      if (o.used >= r.u.maxTenants) fail('conflict', `候选共享资源已满（${o.used}/${r.u.maxTenants}）`)
+    } else if (o.mode === 'shared') fail('conflict', '候选资源上已有共享订阅，独享订阅不能换过去（违反独占）')
+  }
+
   const fulfill =(s: SubRow, order: AdminOrder | undefined, resourceId?: string) => {
+    const shared = s.plan.exitMode === 'shared'
+    const exclOK = (u: UpstreamRow) => (u.u.status === 'available' && occ(u).mode === 'none') || (u.u.status === 'reserved' && Boolean(order) && u.u.reservedOrderId === order?.id)
+    const sharedOK = (u: UpstreamRow) => (u.u.status === 'available' || u.u.status === 'pending_verify') && sharedFree(u)
+    const inRegion = (u: UpstreamRow) => u.u.countryCode === s.plan.countryCode && u.u.city === s.plan.city
+    // 独享：优先上限为 1 的资源；共享：人数最少优先（docs/06 §9.1）。
     const pick = resourceId
-      ? db.upstreams.find((u) => u.u.id === resourceId && (u.u.status === 'available' || (u.u.status === 'reserved' && u.u.reservedOrderId === order?.id)))
-      : db.upstreams.find((u) => (u.u.status === 'available' || (u.u.status === 'reserved' && order && u.u.reservedOrderId === order.id)) && u.u.countryCode === s.plan.countryCode && u.u.city === s.plan.city)
+      ? db.upstreams.find((u) => u.u.id === resourceId && (shared ? sharedOK(u) : exclOK(u)))
+      : shared
+        ? db.upstreams.filter((u) => sharedOK(u) && u.u.status === 'available' && inRegion(u)).sort((a, b) => occ(a).used - occ(b).used)[0]
+        : db.upstreams.filter((u) => exclOK(u) && inRegion(u)).sort((a, b) => Number(b.u.maxTenants === 1) - Number(a.u.maxTenants === 1))[0]
     const failure: TaskRow['failure'] = !pick
       ? { code: 'no_stock', reason: `无可售库存（${s.plan.country} · ${s.plan.city}），已回收端口` }
       : 'error' in pick.probe
         ? { code: 'exit_unverified', reason: `出口验证失败：${pick.probe.error}` }
         : undefined
-    if (pick) {
+    if (pick && shared) pick.pendingShared = [...(pick.pendingShared ?? []), s.id]
+    else if (pick) {
       pick.u.status = 'reserved'
       pick.u.reservedOrderId = order?.id ?? null
     }
@@ -646,7 +743,8 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
       { kind: 'fulfill', orderId: order?.id ?? null, newAccessVersion: 1, newExitVersion: (s.exitBindings.at(-1)?.version ?? 0) + 1 },
       () => {
         if (!pick || 'error' in pick.probe) {
-          if (pick) Object.assign(pick.u, { status: 'pending_verify', reservedOrderId: null })
+          if (pick && shared) dropPending(pick, s.id)
+          else if (pick) Object.assign(pick.u, { status: 'pending_verify', reservedOrderId: null })
           s.lifecycle = 'fulfill_failed'
           s.lifecycleReason = row.t.failureReason
           if (order) {
@@ -657,9 +755,12 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         }
         const seen = pick.probe
         const { seconds } = sums(s.id)
-        pick.u.status = 'bound'
-        pick.u.boundSubscriptionId = s.id
-        pick.u.reservedOrderId = null
+        if (shared) dropPending(pick, s.id)
+        else {
+          pick.u.status = 'bound'
+          pick.u.boundSubscriptionId = s.id
+          pick.u.reservedOrderId = null
+        }
         const node = db.nodes.find((n) => n.id === pick.u.nodeId)!
         const port = 26000 + db.seq * 3
         const accId = nextId('acc')
@@ -671,6 +772,8 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         const exb = nextId('exb')
         const ev = (s.exitBindings.at(-1)?.version ?? 0) + 1
         s.exit = {
+          exitMode: s.plan.exitMode,
+          maxTenants: pick.u.maxTenants,
           bindingId: exb,
           version: ev,
           resourceId: pick.u.id,
@@ -1000,7 +1103,8 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         if (remaining > 0 && !body.acknowledgeRemainingTraffic) fail('precondition', `订阅还有 ${(remaining / GB).toFixed(2)} GB 剩余流量，需先确认人工处置`)
         if (s.exit) {
           const r = db.upstreams.find((u) => u.u.id === s.exit!.resourceId)
-          if (r) {
+          if (r && s.exit.exitMode === 'shared') r.cooldownSlots = [...(r.cooldownSlots ?? []), now + 7 * DAY]
+          else if (r) {
             r.u.status = 'cooldown'
             r.u.boundSubscriptionId = null
             r.u.cooldownUntil = iso(now + 7 * DAY)
@@ -1088,8 +1192,9 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         const s = findSub(subscriptionId)
         if (s.lifecycle !== 'active' && s.lifecycle !== 'retained') fail('precondition', '只有“有效”或“保留期”的订阅可以换出口')
         const r = findUpstream(body.resourceId)
-        if (r.u.boundSubscriptionId === s.id) fail('conflict', '这就是该订阅当前的上游资源')
+        if (r.u.boundSubscriptionId === s.id || s.exit?.resourceId === r.u.id) fail('conflict', '这就是该订阅当前的上游资源')
         if (!(r.u.status === 'available' || r.u.status === 'pending_verify') || r.u.boundSubscriptionId) fail('conflict', `候选资源当前状态为“${r.u.status}”，不能作为候选（须为可售或待验证且未被占用）`)
+        candidateRule(s, r)
         if (activeTask(s.id)) fail('conflict', '已有进行中的任务，完成后再试')
         return newProbe({ kind: 'candidate_compare', nodeId: r.u.nodeId, subscriptionId: s.id, resourceId: r.u.id }).p
       }),
@@ -1109,9 +1214,13 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
           if (activeTask(s.id)) fail('conflict', '已有进行中的任务，完成后再试')
           const r = findUpstream(body.resourceId)
           if (r.u.status !== 'available' && r.u.status !== 'pending_verify') fail('conflict', '候选资源已被占用')
+          candidateRule(s, r)
+          const shared = s.plan.exitMode === 'shared'
           const req = body.exitRequestId ? findReq(body.exitRequestId) : null
           if (req && req.status !== 'processing') fail('precondition', '关联的申请需要先受理')
-          r.u.status = 'reserved'
+          // 共享订阅的待生效绑定本身就占一个名额（docs/04 §7.6），不改资源状态。
+          if (shared) r.pendingShared = [...(r.pendingShared ?? []), s.id]
+          else r.u.status = 'reserved'
           const newVersion = (s.exitBindings.reduce((m, b) => Math.max(m, b.version), 0) || 0) + 1
           const oldIp = s.exit?.verifiedIp ?? null
           const row = newTask(
@@ -1119,20 +1228,28 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
             { kind: body.alsoChangeAccess ? 'combined' : 'exit_change', newExitVersion: newVersion, newAccessVersion: body.alsoChangeAccess ? (s.access?.version ?? 0) + 1 : null, exitRequestId: req?.id ?? null },
             () => {
               if (row.t.state === 'failed') {
+                if (shared) dropPending(r, s.id)
                 r.u.status = 'quarantine'
                 r.u.reservedTaskId = null
                 r.u.statusReason = '切换后复核失败，已隔离'
+                sharedDownAlerts(r, 'quarantine', '切换后复核失败')
                 return
               }
               const seen = r.probe as { ip: string; countryCode: string; city: string; latencyMs: number }
               const old = s.exitBindings.find((b) => b.state === 'active')
               if (old) Object.assign(old, { state: 'unbound', unboundAt: iso(now), unboundReason: body.reason })
               const oldRes = s.exit ? db.upstreams.find((u) => u.u.id === s.exit!.resourceId) : undefined
-              if (oldRes) Object.assign(oldRes.u, { status: 'cooldown', boundSubscriptionId: null, cooldownUntil: iso(now + 7 * DAY), statusReason: '换出口释放', updatedAt: iso(now) })
-              Object.assign(r.u, { status: 'bound', boundSubscriptionId: s.id, reservedTaskId: null, updatedAt: iso(now) })
+              if (oldRes && s.exit?.exitMode === 'shared') {
+                oldRes.cooldownSlots = [...(oldRes.cooldownSlots ?? []), now + 7 * DAY]
+                resolveSharedAlerts(oldRes.u.id, s.id)
+              } else if (oldRes) Object.assign(oldRes.u, { status: 'cooldown', boundSubscriptionId: null, cooldownUntil: iso(now + 7 * DAY), statusReason: '换出口释放', updatedAt: iso(now) })
+              if (shared) {
+                dropPending(r, s.id)
+                Object.assign(r.u, { reservedTaskId: null, updatedAt: iso(now) })
+              } else Object.assign(r.u, { status: 'bound', boundSubscriptionId: s.id, reservedTaskId: null, updatedAt: iso(now) })
               const exb = nextId('exb')
               s.exitBindings.push({ id: exb, version: newVersion, state: 'active', resourceId: r.u.id, verifiedIp: seen.ip, verifiedCountryCode: seen.countryCode, check: { result: 'ok', ip: seen.ip, countryCode: seen.countryCode, city: seen.city, asn: 'AS64500 示意 ISP', latencyMs: seen.latencyMs, error: null, checkedAt: iso(now) }, boundAt: iso(now), unboundAt: null, unboundReason: null, taskId: row.t.id })
-              s.exit = { bindingId: exb, version: newVersion, resourceId: r.u.id, provider: r.u.provider, upstreamProtocol: r.u.protocol, upstreamAddr: `${r.u.host}:${r.u.port}`, verifiedIp: seen.ip, ip: seen.ip, countryCode: seen.countryCode, country: s.plan.country, city: seen.city, check: 'ok', latencyMs: seen.latencyMs, checkedAt: iso(now), checkError: null, boundAt: iso(now) }
+              s.exit = { exitMode: s.plan.exitMode, maxTenants: r.u.maxTenants, bindingId: exb, version: newVersion, resourceId: r.u.id, provider: r.u.provider, upstreamProtocol: r.u.protocol, upstreamAddr: `${r.u.host}:${r.u.port}`, verifiedIp: seen.ip, ip: seen.ip, countryCode: seen.countryCode, country: s.plan.country, city: seen.city, check: 'ok', latencyMs: seen.latencyMs, checkedAt: iso(now), checkError: null, boundAt: iso(now) }
               if (body.alsoChangeAccess && s.access) {
                 const v = s.access.version + 1
                 const oldAcc = s.accessVersions.find((x) => x.state === 'active')
@@ -1245,7 +1362,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         const statuses = asArray(q.status)
         const needle = q.q?.trim().toLowerCase()
         const items = db.upstreams
-          .map((r) => r.u)
+          .map(upView)
           .filter((u) => !statuses?.length || statuses.includes(u.status))
           .filter((u) => !q.countryCode || u.countryCode === q.countryCode)
           .filter((u) => !q.city || u.city === q.city)
@@ -1282,6 +1399,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         if (!/^[a-z]{2}$/.test(body.countryCode) || !body.city.trim()) fail('invalid', '国家代码与城市必填')
         if (!db.nodes.some((n) => n.id === body.nodeId)) fail('invalid', '节点不存在')
         if (db.upstreams.some((r) => r.u.protocol === protocol && r.u.host === host && r.u.port === port && r.u.username === (username ?? ''))) fail('conflict', '同一协议、主机、端口与用户名的资源已存在')
+        if (body.maxTenants !== undefined && (!Number.isInteger(body.maxTenants) || body.maxTenants < 1 || body.maxTenants > 100)) fail('invalid', '绑定上限须为 1～100 的整数')
         const id = nextId('res')
         const r = rng(id)
         const row: UpstreamRow = {
@@ -1305,6 +1423,8 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
             reservedUntil: null,
             boundSubscriptionId: null,
             cooldownUntil: null,
+            maxTenants: body.maxTenants ?? 3,
+            occupancy: { mode: 'none', used: 0, bound: 0, reserved: 0, cooldown: 0 },
             lastVerify: null,
             rowVersion: 1,
             createdAt: iso(now),
@@ -1314,12 +1434,14 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         }
         db.upstreams.unshift(row)
         audit('upstream.create', 'upstream', id, { protocol, host, port, hasPassword: Boolean(password) })
-        return row.u
+        return upView(row)
       }),
     adminGetUpstream: ({ upstreamId }) =>
       wait(() => {
         me()
-        return findUpstream(upstreamId).u
+        const r = findUpstream(upstreamId)
+        const detail: UpstreamDetail = { ...upView(r), tenants: tenantsOf(r) }
+        return detail
       }),
     adminUpdateUpstream: ({ upstreamId, body }) =>
       wait(() => {
@@ -1333,6 +1455,14 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
           (body.username !== undefined && body.username !== r.u.username) ||
           (body.password !== undefined && body.password !== '')
         if (connChanged && r.u.status === 'bound') fail('precondition', '已占用的资源不能改连接信息，请先为订阅换出口')
+        const o = occ(r)
+        if (connChanged && o.mode === 'shared' && o.bound + o.reserved > 0) fail('precondition', '资源上还有共享订阅，不能改连接信息，请先为它们换出口')
+        if (body.maxTenants !== undefined) {
+          const n = body.maxTenants
+          if (!Number.isInteger(n) || n < 1 || n > 100) fail('invalid', '绑定上限须为 1～100 的整数')
+          if (o.mode === 'shared' && n < 2) fail('precondition', '资源上有共享占用，绑定上限不能改为 1')
+          if (o.mode === 'shared' && n < o.used) fail('precondition', `绑定上限不能低于当前占用 ${o.used}`)
+        }
         const { rowVersion: _rv, password, ...rest } = body
         void _rv
         Object.assign(r.u, Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)))
@@ -1343,8 +1473,9 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         }
         r.u.rowVersion += 1
         r.u.updatedAt = iso(now)
+        if (connChanged) r.cooldownSlots = []
         audit('upstream.update', 'upstream', r.u.id, { connectionChanged: connChanged })
-        return r.u
+        return upView(r)
       }),
     adminSetUpstreamStatus: ({ upstreamId, body }) =>
       wait(() => {
@@ -1360,10 +1491,12 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         r.u.status = body.status
         r.u.statusReason = body.reason.trim()
         if (body.status === 'available') r.u.cooldownUntil = null
+        if (body.status === 'available') resolveSharedAlerts(r.u.id)
+        else sharedDownAlerts(r, body.status, body.reason.trim())
         r.u.updatedAt = iso(now)
         r.u.rowVersion += 1
         audit('upstream.status', 'upstream', r.u.id, { status: body.status, reason: body.reason })
-        return r.u
+        return upView(r)
       }),
     adminVerifyUpstream: ({ upstreamId }) =>
       wait(() => {
@@ -1385,9 +1518,9 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(body.code)) fail('invalid', '代码只能用小写字母、数字和连字符')
         if (db.plans.some((p) => p.code === body.code)) fail('conflict', '套餐代码已存在')
         const id = nextId('pln')
-        const p = { id, code: body.code, status: 'draft' as const, sortOrder: body.sortOrder ?? db.plans.length * 10 + 10, versions: [{ ...body.version, id: nextId('plv'), version: 1, createdAt: iso(now), createdBy: adminRef() }] }
+        const p = { id, code: body.code, exitMode: body.exitMode ?? ('exclusive' as const), status: 'draft' as const, sortOrder: body.sortOrder ?? db.plans.length * 10 + 10, versions: [{ ...body.version, id: nextId('plv'), version: 1, createdAt: iso(now), createdBy: adminRef() }] }
         db.plans.push(p)
-        audit('plan.create', 'plan', id, { code: body.code })
+        audit('plan.create', 'plan', id, { code: body.code, exitMode: p.exitMode })
         return planView(p, true)
       }),
     adminGetPlan: ({ planId }) =>
@@ -1528,7 +1661,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         const s = blankSub({ name: '服务器直出', userId: u.id, planId: placeholder.id, orderId: '', nodeId: node.id })
         s.createdFromOrderId = null
         s.direct = { bandwidthMbps: bw, maxConnections: DIRECT_MAX_CONNS }
-        s.plan = { planId: '', planVersionId: '', planVersion: 0, name: '服务器直出', countryCode: '', country: '', city: '', concurrency: DIRECT_MAX_CONNS, bandwidthMbps: bw }
+        s.plan = { planId: '', planVersionId: '', planVersion: 0, name: '服务器直出', exitMode: 'exclusive', countryCode: '', country: '', city: '', concurrency: DIRECT_MAX_CONNS, bandwidthMbps: bw }
         s.freeExitChangesLeft = 0
         const port = 27000 + db.seq * 3
         const accId = nextId('acc')

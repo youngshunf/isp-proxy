@@ -103,6 +103,7 @@ type ExitInfo struct {
 	City       string `json:"city"`
 	URL        string `json:"url"` // 录入用的上游地址（含凭据）
 	ResourceID string `json:"resourceId,omitempty"`
+	MaxTenants int    `json:"maxTenants"` // 绑定上限（D-24）：1 独享，≥2 可共享
 }
 
 func run(ctx context.Context, o options) (err error) {

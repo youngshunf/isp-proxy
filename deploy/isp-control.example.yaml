@@ -28,6 +28,8 @@ core:
   # 开发与测试用静态映射；生产应接 GeoIP 库。
   exit_countries:
     203.0.113.10: us
+  # 录入上游资源时不填“绑定上限”的默认值（D-24）：一个资源最多同时给几个共享订阅使用；1 表示只给独享套餐。
+  shared_exit_default_capacity: 3
   # 以下调度参数一般不改（零值取内核默认值）；平台 E2E（tests/isp）调小以加快场景。
   # scheduler_interval: 5s     # 调度器周期（到期、保留期、预留回收、冷却、任务超时）
   # task_timeout: 2m           # 变更任务超时

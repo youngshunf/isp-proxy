@@ -87,3 +87,15 @@ export function BrandMark({ size = 28 }: { size?: number }) {
     </svg>
   )
 }
+
+/** 出口类型（D-24）的文字。 */
+export const EXIT_MODE_LABEL = { exclusive: '独享', shared: '共享' } as const
+
+/**
+ * 出口类型标签片：独享为普通描边片，共享用深青淡底；文字本身携带含义，不只靠颜色。
+ * 共享时 capacity 给出“最多 N 人共用”的上限（用户端只显示上限，不显示当前人数）。
+ */
+export function ExitModeChip({ mode, capacity }: { mode: 'exclusive' | 'shared'; capacity?: number | null }) {
+  const text = mode === 'shared' && capacity ? `共享 · 最多 ${capacity} 人` : EXIT_MODE_LABEL[mode]
+  return <span className={`chip exit-mode${mode === 'shared' ? ' tone-wait' : ''}`}>{text}</span>
+}

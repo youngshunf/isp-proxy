@@ -169,7 +169,7 @@ func cmdSeedDev(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "已写入开发种子数据（示例套餐、流量包、节点 nod_dev00000000000000001、回环上游、带示例收款说明的规则版本）。")
+	fmt.Fprintln(stdout, "已写入开发种子数据（示例套餐：独享 us-lax、jp-tyo 与共享 us-lax-shared；流量包；节点 nod_dev00000000000000001；回环上游，其中 res_dev00000000000000002 可共享（绑定上限 3）；带示例收款说明的规则版本）。")
 	if *userEmail != "" {
 		fmt.Fprintf(stdout, "开发用户：%s（已存在则保持原密码）\n", *userEmail)
 	}

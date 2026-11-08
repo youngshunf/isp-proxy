@@ -131,6 +131,31 @@ func (a *Admin) CreatePlan(code string, v PlanVersionInput) AdminPlan {
 	return p
 }
 
+// CreateSharedPlan 新建并上架共享出口套餐（D-24）。
+func (a *Admin) CreateSharedPlan(code string, v PlanVersionInput) AdminPlan {
+	a.t.Helper()
+	var p AdminPlan
+	a.Must("POST", "/plans", map[string]any{"code": code, "exitMode": "shared", "version": v}, &p)
+	a.Must("POST", "/plans/"+p.ID+"/status", map[string]string{"status": "on_sale"}, &p)
+	return p
+}
+
+// SetMaxTenants 修改资源的绑定上限（乐观锁取当前 rowVersion）。
+func (a *Admin) SetMaxTenants(id string, n int) Upstream {
+	a.t.Helper()
+	var u Upstream
+	a.Must("PATCH", "/upstreams/"+id, map[string]any{"rowVersion": a.Upstream(id).RowVersion, "maxTenants": n}, &u)
+	return u
+}
+
+// SetUpstreamStatus 人工改变库存状态。
+func (a *Admin) SetUpstreamStatus(id, status, reason string) Upstream {
+	a.t.Helper()
+	var u Upstream
+	a.Must("POST", "/upstreams/"+id+"/status", map[string]string{"status": status, "reason": reason}, &u)
+	return u
+}
+
 // CreatePack 新建并上架流量包。
 func (a *Admin) CreatePack(code string, bytes, cents int64) AdminPack {
 	a.t.Helper()

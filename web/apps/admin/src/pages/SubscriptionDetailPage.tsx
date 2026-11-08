@@ -18,7 +18,7 @@ import { App, Button, Dropdown, Table, Tabs } from 'antd'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import type { AccessSecret, AdminSubscriptionDetail, Probe, Task } from '@isp/api-client/admin'
-import { CountryFlag, Meter, Plate, fmtBytes, fmtBytesExact, fmtDateTime, fmtMoney, fmtSpan, splitBytes, splitDuration } from '@isp/ui'
+import { CountryFlag, ExitModeChip, Meter, Plate, fmtBytes, fmtBytesExact, fmtDateTime, fmtMoney, fmtSpan, splitBytes, splitDuration } from '@isp/ui'
 import { errorText, qk, useApi } from '../app/api'
 import { Ago, BlockerChips, Callout, CopyButton, Facts, LoadError, Loading, Mono, PageHead, State } from '../components/bits'
 import { ConfirmAction } from '../components/ConfirmAction'
@@ -226,6 +226,7 @@ export default function SubscriptionDetailPage() {
                       ['检测时间', s.exit.checkedAt ? <Ago key="t" at={s.exit.checkedAt} /> : null],
                       ['检测错误', s.exit.checkError],
                       ['出口版本', <span key="v" className="version-chip">v{s.exit.version}</span>],
+                      ['出口类型', <ExitModeChip key="m" mode={s.exit.exitMode} capacity={s.exit.exitMode === 'shared' ? s.exit.maxTenants : null} />],
                       ['绑定时间', s.exit.boundAt ? fmtDateTime(s.exit.boundAt) : null],
                       ['供应商', s.exit.provider],
                       ['上游', <Mono key="u">{`${s.exit.upstreamProtocol}://${s.exit.upstreamAddr}`}</Mono>],

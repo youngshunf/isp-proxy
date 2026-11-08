@@ -127,7 +127,7 @@ func (s *Service) Resume(ctx context.Context, tx *kernel.Tx, id, adminID string)
 	return tx.BumpSub(ctx, id)
 }
 
-// releaseResources 撤销当前接入与出口：端口与资源进入冷却（R-10.4、D-14a）。
+// releaseResources 撤销当前接入与出口：端口与资源（共享为名额）进入冷却（R-10.4、D-14a、D-24）。
 func releaseResources(ctx context.Context, tx *kernel.Tx, id string, st *state, reason string) error {
 	rules, err := kernel.CurrentRules(ctx, tx, tx.Now())
 	if err != nil {
@@ -144,12 +144,12 @@ func releaseResources(ctx context.Context, tx *kernel.Tx, id string, st *state, 
 		}
 	}
 	if st.CurExit != nil {
-		var res string
-		if err := tx.QueryRow(ctx, `UPDATE exit_bindings SET state = 'unbound', unbound_at = $2, unbound_reason = $3
-		                             WHERE id = $1 RETURNING resource_id`, *st.CurExit, now, reason).Scan(&res); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE exit_bindings SET state = 'unbound', unbound_at = $2, unbound_reason = $3
+		                             WHERE id = $1`, *st.CurExit, now, reason); err != nil {
 			return err
 		}
-		if err := inventory.Cooldown(ctx, tx, res, now.Add(kernel.Days(rules.ResourceCooldownDays))); err != nil {
+		// 独享资源整份冷却；共享订阅腾出的名额冷却同样天数后才再分配（D-24）。
+		if err := inventory.ReleaseBinding(ctx, tx, *st.CurExit, now.Add(kernel.Days(rules.ResourceCooldownDays))); err != nil {
 			return err
 		}
 	}

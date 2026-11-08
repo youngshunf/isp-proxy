@@ -211,23 +211,18 @@ func (c *Core) healthAlerts(ctx context.Context) error {
 				}
 			}
 		}
-		// 在售套餐所在地域的可售资源低于阈值。
-		rows, err = tx.Query(ctx, `SELECT DISTINCT pv.country_code, pv.city,
-		       (SELECT count(*) FROM upstream_resources r JOIN nodes n ON n.id = r.node_id
-		         WHERE r.status = 'available' AND n.status = 'active' AND r.country_code = pv.country_code AND r.city = pv.city)
+		// 在售套餐所在地域、按出口类型的库存低于阈值：独享数空闲资源，共享数剩余名额（D-24）。
+		rows, err = tx.Query(ctx, `SELECT DISTINCT pv.country_code, pv.city, p.exit_mode
 		      FROM plans p JOIN LATERAL (SELECT * FROM plan_versions v WHERE v.plan_id = p.id ORDER BY v.version DESC LIMIT 1) pv ON true
 		     WHERE p.status = 'on_sale'`)
 		if err != nil {
 			return err
 		}
-		type region struct {
-			cc, city string
-			n        int
-		}
+		type region struct{ cc, city, mode string }
 		var rs []region
 		for rows.Next() {
 			var r region
-			if err := rows.Scan(&r.cc, &r.city, &r.n); err != nil {
+			if err := rows.Scan(&r.cc, &r.city, &r.mode); err != nil {
 				rows.Close()
 				return err
 			}
@@ -238,10 +233,17 @@ func (c *Core) healthAlerts(ctx context.Context) error {
 			return err
 		}
 		for _, r := range rs {
-			key := "stock_low:" + r.cc + ":" + r.city
-			if r.n < cfg.StockLowThreshold {
+			n, _, _, err := inventory.StockCounts(ctx, tx, r.mode, r.cc, r.city)
+			if err != nil {
+				return err
+			}
+			key, msg := "stock_low:"+r.cc+":"+r.city, "地域 "+r.cc+"/"+r.city+" 可售资源不足"
+			if r.mode == inventory.ModeShared {
+				key, msg = key+":shared", "地域 "+r.cc+"/"+r.city+" 共享出口剩余名额不足"
+			}
+			if n < cfg.StockLowThreshold {
 				if err := alert.Raise(ctx, tx, now, alert.Alert{Kind: "stock_low", Severity: "warning", Key: key,
-					Message: "地域 " + r.cc + "/" + r.city + " 可售资源不足", Details: map[string]any{"available": r.n}}); err != nil {
+					Message: msg, Details: map[string]any{"available": n, "exitMode": r.mode}}); err != nil {
 					return err
 				}
 			} else if err := alert.Resolve(ctx, tx, now, key); err != nil {

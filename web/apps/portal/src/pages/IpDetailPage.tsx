@@ -9,7 +9,7 @@ import { useTitle } from '../app/Shell'
 import { AccessPanel } from '../components/AccessPanel'
 import { Balances } from '../components/Balances'
 import { ExitPanel } from '../components/ExitPanel'
-import { CountryFlag, StateMark } from '@isp/ui'
+import { CountryFlag, ExitModeChip, StateMark } from '@isp/ui'
 import { Plate } from '@isp/ui'
 import { ExitFace, StateCell, serial } from '../components/SimCard'
 import { DirectDetail } from '../components/DirectDetail'
@@ -215,6 +215,7 @@ export default function IpDetailPage() {
           <Rename sub={sub} />
           <div className="page-head-sub">
             <span>{sub.plan.name}</span>
+            <ExitModeChip mode={sub.plan.exitMode} capacity={sub.exit?.sharedCapacity} />
             <span>
               并发 {sub.plan.concurrency} · 带宽 {sub.plan.bandwidthMbps} Mbps
             </span>

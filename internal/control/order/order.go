@@ -92,6 +92,7 @@ func (s *Service) Create(ctx context.Context, tx *kernel.Tx, userID string, in I
 	var subID, planID, planVersionID *string
 	var months *int
 	var country, city string
+	var exitMode *string // 新购订单快照套餐的出口类型（D-24）
 	switch in.Kind {
 	case "new":
 		if in.Quantity != 1 && !(o.AdminID != "" && in.Quantity == 0) {
@@ -129,6 +130,11 @@ func (s *Service) Create(ctx context.Context, tx *kernel.Tx, userID string, in I
 			Amount: kernel.CNY(amount), Seconds: int64(in.Months*pv.PeriodDays) * 86400, Bytes: pv.IncludedBytes * int64(in.Months)})
 		planID, planVersionID, months = &pv.PlanID, &pv.ID, &in.Months
 		country, city = pv.CountryCode, pv.City
+		mode, err := catalog.PlanExitMode(ctx, tx, pv.PlanID)
+		if err != nil {
+			return "", err
+		}
+		exitMode = &mode
 	case "renew_time", "add_traffic":
 		if in.SubscriptionID == "" {
 			return "", httpx.Invalid("subscriptionId 必填")
@@ -204,9 +210,9 @@ func (s *Service) Create(ctx context.Context, tx *kernel.Tx, userID string, in I
 		admin = &o.AdminID
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO orders (id, user_id, kind, subscription_id, plan_id, plan_version_id, months, amount_cents,
-	                            payment_method, rules_version, rules_snapshot, hold_until, created_by_admin, created_at)
-	                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-		id, userID, in.Kind, subID, planID, planVersionID, months, total, method, rules.Version, snapshot, hold, admin, now); err != nil {
+	                            payment_method, rules_version, rules_snapshot, hold_until, created_by_admin, created_at, exit_mode)
+	                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		id, userID, in.Kind, subID, planID, planVersionID, months, total, method, rules.Version, snapshot, hold, admin, now, exitMode); err != nil {
 		return "", err
 	}
 	for i, l := range lines {
@@ -217,7 +223,7 @@ func (s *Service) Create(ctx context.Context, tx *kernel.Tx, userID string, in I
 		}
 	}
 	if in.Kind == "new" && !o.SkipStock {
-		if _, err := inventory.ReserveForOrder(ctx, tx, country, city, id, hold); err != nil {
+		if _, err := inventory.ReserveForOrder(ctx, tx, *exitMode, country, city, id, hold); err != nil {
 			if errors.Is(err, inventory.ErrNoStock) {
 				return "", httpx.Conflict("该地区暂时无货，请稍后再试或选择其他地区")
 			}
@@ -359,17 +365,18 @@ func (s *Service) credit(ctx context.Context, tx *kernel.Tx, o *ord, adminID str
 	subID := kernel.StrOr(o.Sub, "")
 	var lifecycle string
 	if o.Kind == "new" {
-		var name, planID, rulesVersion string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(NULLIF(o.rules_snapshot->>'name', ''), pv.name), o.plan_id, o.rules_version
+		var name, planID, rulesVersion, exitMode string
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(NULLIF(o.rules_snapshot->>'name', ''), pv.name), o.plan_id, o.rules_version, o.exit_mode
 		                             FROM orders o JOIN plan_versions pv ON pv.id = o.plan_version_id WHERE o.id = $1`, o.ID).
-			Scan(&name, &planID, &rulesVersion); err != nil {
+			Scan(&name, &planID, &rulesVersion, &exitMode); err != nil {
 			return "", err
 		}
 		name, _ = kernel.TrimName(kernel.TruncateRunes(name, 24))
 		subID = store.NewID("sub")
-		if _, err := tx.Exec(ctx, `INSERT INTO subscriptions (id, user_id, plan_id, plan_version_id, rules_version, created_from_order_id, name, created_at)
-		                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			subID, o.UserID, planID, *o.PlanVersionID, rulesVersion, o.ID, name, now); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO subscriptions (id, user_id, plan_id, plan_version_id, rules_version, created_from_order_id, name,
+		                              created_at, exit_mode)
+		                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			subID, o.UserID, planID, *o.PlanVersionID, rulesVersion, o.ID, name, now, exitMode); err != nil {
 			return "", err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE orders SET subscription_id = $2 WHERE id = $1`, o.ID, subID); err != nil {
@@ -540,11 +547,8 @@ func (s *Service) ExpireHolds(ctx context.Context) error {
 				return err
 			}
 		}
-		// 资源预留到期但订单仍未处理（例如代建失败遗留）：释放。
-		_, err = tx.Exec(ctx, `UPDATE upstream_resources SET status = 'available', reserved_order_id = NULL, reserved_until = NULL,
-		                         row_version = row_version + 1
-		                        WHERE status = 'reserved' AND reserved_order_id IS NOT NULL AND reserved_until <= $1`, tx.Now())
-		return err
+		// 资源预留到期但订单仍未处理（例如代建失败遗留）：释放（独享预留与共享名额）。
+		return inventory.ExpireStaleHolds(ctx, tx, tx.Now())
 	})
 }
 

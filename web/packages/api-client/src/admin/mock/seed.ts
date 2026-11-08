@@ -26,6 +26,9 @@ import type {
   Transfer,
   Upstream,
 } from '../types'
+import type { Schemas } from '../types'
+
+type ExitMode = Schemas['ExitMode']
 import { fid, payRefOf, secretOf } from './ids'
 
 export const GB = 1_000_000_000
@@ -78,7 +81,7 @@ export interface SubRow {
   name: string
   userId: string
   nodeId: string | null
-  plan: { planId: string; planVersionId: string; planVersion: number; name: string; countryCode: string; country: string; city: string; concurrency: number; bandwidthMbps: number }
+  plan: { planId: string; planVersionId: string; planVersion: number; name: string; exitMode: ExitMode; countryCode: string; country: string; city: string; concurrency: number; bandwidthMbps: number }
   /** 服务器直出代理（D-25）：有值时 plan 只是占位（视图里输出 null），没有出口与账本。 */
   direct?: { bandwidthMbps: number; maxConnections: number }
   lifecycle: AdminLifecycle
@@ -116,6 +119,8 @@ export interface SubRow {
 export interface PlanRow {
   id: string
   code: string
+  /** 出口类型（D-24），建好后不可改。 */
+  exitMode: ExitMode
   status: SaleStatus
   sortOrder: number
   versions: PlanVersion[]
@@ -135,6 +140,10 @@ export interface UpstreamRow {
   probe: { ip: string; countryCode: string; city: string; latencyMs: number } | { error: string }
   /** 提交切换后数据面复核失败（演示失败回滚）。 */
   failsOnApply?: boolean
+  /** 共享名额冷却（D-24）：共享订阅离开后名额冷却到这些时刻，期间不再分配（docs/04 §7.6）。 */
+  cooldownSlots?: number[]
+  /** 进行中的共享开通/换出口（待生效绑定占的名额）。 */
+  pendingShared?: string[]
 }
 
 export interface TaskRow {
@@ -285,13 +294,15 @@ export function seed(now: number): Db {
     { code: 'jp-tyo', cc: 'jp', country: '日本', city: '东京', price: 198, gb: 100, conc: 80, bw: 30, status: 'on_sale' as const },
     { code: 'sg-sin', cc: 'sg', country: '新加坡', city: '新加坡', price: 158, gb: 50, conc: 50, bw: 20, status: 'on_sale' as const },
     { code: 'ca-yvr', cc: 'ca', country: '加拿大', city: '温哥华', price: 178, gb: 50, conc: 50, bw: 20, status: 'draft' as const },
+    // 共享出口套餐（D-24）：同一出口最多由资源的绑定上限个订阅共用。
+    { code: 'us-lax-shared', cc: 'us', country: '美国', city: '洛杉矶', price: 68, gb: 20, conc: 20, bw: 10, status: 'on_sale' as const, mode: 'shared' as const },
   ]
   const plans: PlanRow[] = planDefs.map((d, i) => {
     const id = fid('pln', d.code)
     const v1: PlanVersion = {
       id: fid('plv', `${d.code}:1`),
       version: 1,
-      name: `${d.country} · ${d.city} 包月`,
+      name: `${d.country} · ${d.city} ${'mode' in d ? '共享' : ''}包月`,
       countryCode: d.cc,
       country: d.country,
       city: d.city,
@@ -307,7 +318,7 @@ export function seed(now: number): Db {
     if (d.code === 'us-lax') {
       versions.unshift({ ...v1, id: fid('plv', `${d.code}:2`), version: 2, price: cny(d.price), createdAt: iso(now - 12 * DAY) })
     }
-    return { id, code: d.code, status: d.status, sortOrder: (i + 1) * 10, versions }
+    return { id, code: d.code, exitMode: 'mode' in d && d.mode ? d.mode : ('exclusive' as const), status: d.status, sortOrder: (i + 1) * 10, versions }
   })
   const planBy = (code: string) => plans.find((p) => p.code === code)!
 
@@ -432,6 +443,8 @@ export function seed(now: number): Db {
       failsOnApply?: boolean
       note?: string
       createdAgo?: number
+      /** 绑定上限（D-24）；mock 里已占用的独享资源默认 1，共享资源显式给 ≥2。 */
+      maxTenants?: number
     },
   ): UpstreamRow => {
     const p = planBy(o.plan).versions[0]!
@@ -457,6 +470,9 @@ export function seed(now: number): Db {
         reservedUntil: null,
         boundSubscriptionId: o.bound ?? null,
         cooldownUntil: o.cooldownUntil ? iso(o.cooldownUntil) : null,
+        maxTenants: o.maxTenants ?? 1,
+        // 占用由 mock 按订阅实时计算（见 index.ts upView），这里只是占位。
+        occupancy: { mode: 'none', used: 0, bound: 0, reserved: 0, cooldown: 0 },
         lastVerify:
           o.verifiedOk === false
             ? null
@@ -594,6 +610,8 @@ export function seed(now: number): Db {
     conns?: number | null
     lifecycleReason?: string
     freeExitLeft?: number
+    /** 共享订阅绑到这个已有的共享资源（不另建资源）。 */
+    sharedOn?: UpstreamRow
   }): SubRow => {
     const plan = planBy(o.plan)
     const pv = plan.versions[plan.versions.length - 1]!
@@ -613,6 +631,7 @@ export function seed(now: number): Db {
         planVersionId: pv.id,
         planVersion: pv.version,
         name: pv.name,
+        exitMode: plan.exitMode,
         countryCode: pv.countryCode,
         country: pv.country,
         city: pv.city,
@@ -707,7 +726,7 @@ export function seed(now: number): Db {
       taskId: null,
     })
     if (o.exit && o.lifecycle !== 'released') {
-      const res = upstream(`bound:${o.key}`, {
+      const res = o.sharedOn ?? upstream(`bound:${o.key}`, {
         node,
         plan: o.plan,
         host: `gw${subs.length}.isp-a.example.net`,
@@ -721,6 +740,8 @@ export function seed(now: number): Db {
       const checkedAt = now - (o.exit.checkedAgo ?? 6 * MIN)
       const exb = fid('exb', `${o.key}:1`)
       sub.exit = {
+        exitMode: plan.exitMode,
+        maxTenants: res.u.maxTenants,
         bindingId: exb,
         version: 1,
         resourceId: res.u.id,
@@ -1596,6 +1617,51 @@ export function seed(now: number): Db {
       occurrences: 2,
     }),
   ]
+
+  // 共享出口（D-24，放在最后，不改变其他示意数据的编号）：shared-lax-1 上限 3、已有 2 个共享订阅；shared-lax-2 上限 4、1 个共享订阅、1 个冷却名额。
+  const sharedLax1 = upstream('shared-lax-1', {
+    node: nodeLax,
+    plan: 'us-lax-shared',
+    host: 'gw-s1.isp-a.example.net',
+    port: 1080,
+    status: 'available',
+    maxTenants: 3,
+    note: '共享出口',
+    exit: { ip: '203.0.113.131', countryCode: 'us', city: '洛杉矶', latencyMs: 176 },
+    createdAgo: 20 * DAY,
+  })
+  const sharedLax2 = upstream('shared-lax-2', {
+    node: nodeLax,
+    plan: 'us-lax-shared',
+    host: 'gw-s2.isp-a.example.net',
+    port: 1080,
+    status: 'available',
+    maxTenants: 4,
+    note: '共享出口',
+    exit: { ip: '203.0.113.132', countryCode: 'us', city: '洛杉矶', latencyMs: 188 },
+    createdAgo: 20 * DAY,
+  })
+  sharedLax2.cooldownSlots = [now + 3 * DAY]
+  for (const [key, name, who, on] of [
+    ['h8sc', '养号 · 共享 1', bob, sharedLax1],
+    ['h9sd', '养号 · 共享 2', carol, sharedLax1],
+    ['k3se', '采集 · 共享', grace, sharedLax2],
+  ] as const) {
+    makeSub({
+      key,
+      name,
+      user: who,
+      plan: 'us-lax-shared',
+      lifecycle: 'active',
+      startedAgoDays: 6,
+      usedGB: 3.2,
+      exit: { ip: 'error' in on.probe ? '' : on.probe.ip, latencyMs: 'error' in on.probe ? null : on.probe.latencyMs },
+      usage: 'fresh',
+      usageScale: 0.1 * GB,
+      conns: 2,
+      sharedOn: on,
+    })
+  }
 
   // ---------------------------------------------------------------- 审计
   const audit: AuditLog[] = []

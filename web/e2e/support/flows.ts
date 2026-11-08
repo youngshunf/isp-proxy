@@ -24,7 +24,8 @@ export async function registerAndVerify(page: Page, email: string, password = PA
 export async function buyNew(page: Page, region = '美国 洛杉矶'): Promise<string> {
   const { portalUrl } = stack()
   await page.goto(`${portalUrl}/buy`)
-  await page.getByRole('radio', { name: region }).check()
+  // exact：独享“美国 洛杉矶”与共享“美国 洛杉矶 共享”是两行（D-24）
+  await page.getByRole('radio', { name: region, exact: true }).check()
   await page.getByRole('button', { name: /提交订单/ }).click()
   await expect(page).toHaveURL(/\/orders\/[^/]+$/)
   await expect(page.getByText('付款方式').first()).toBeVisible()

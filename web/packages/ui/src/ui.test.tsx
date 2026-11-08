@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CountryFlag, Meter, StateMark, fmtBytes, fmtBytesFine, fmtRate, fmtSpan } from './index'
+import { CountryFlag, ExitModeChip, Meter, StateMark, fmtBytes, fmtBytesFine, fmtRate, fmtSpan } from './index'
 
 afterEach(cleanup)
 
@@ -29,6 +29,12 @@ describe('部件', () => {
   it('国旗有国家名，未知国家显示代码', () => {
     render(<CountryFlag code="zz" name="未知地区" />)
     expect(screen.getByRole('img', { name: '未知地区' }).textContent).toBe('ZZ')
+  })
+  it('出口类型标签：独享 / 共享（带上限）', () => {
+    render(<ExitModeChip mode="exclusive" />)
+    expect(screen.getByText('独享')).toBeTruthy()
+    render(<ExitModeChip mode="shared" capacity={3} />)
+    expect(screen.getByText('共享 · 最多 3 人').className).toContain('tone-wait')
   })
   it('状态点只是装饰，不进入无障碍树', () => {
     const { container } = render(<StateMark shape="half" />)

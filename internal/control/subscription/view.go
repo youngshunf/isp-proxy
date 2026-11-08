@@ -52,6 +52,7 @@ const baseSQL = `SELECT s.id AS id, s.user_id AS user_id, u.email AS email, u.st
 	s.current_access_id AS cur_access, s.current_exit_id AS cur_exit, s.desired_version AS desired_version,
 	s.applied_version AS applied_version, s.active_conns AS active_conns, s.usage_reported_at AS usage_reported_at,
 	s.rules_version AS rules_version, s.created_from_order_id AS created_from_order, s.created_at AS created_at,
+	s.exit_mode AS exit_mode,
 	(SELECT t.id FROM tasks t WHERE t.subscription_id = s.id AND t.state IN ('queued', 'running') LIMIT 1) AS active_task,
 	(SELECT e.id FROM exit_requests e WHERE e.subscription_id = s.id AND e.status IN ('pending', 'processing') LIMIT 1) AS open_exit_request,
 	ARRAY(SELECT o.id FROM orders o WHERE o.subscription_id = s.id AND o.payment_status = 'awaiting' ORDER BY o.created_at, o.id) AS open_orders,
@@ -63,7 +64,7 @@ const outerCols = `id, user_id, email, user_status, name, lifecycle, lifecycle_r
 	plan_version_id, plan_version, plan_name, cc, country, city, concurrency, bandwidth, paid_until, admin_paused, paused_reason, entitled_bytes,
 	used_bytes, entitled_secs, before_secs, first_ready_at, period_started_at, expires_at, retention_ends_at, released_at, deleted_at,
 	cur_access, cur_exit, desired_version, applied_version, active_conns, usage_reported_at, rules_version, created_from_order,
-	created_at, active_task, open_exit_request, open_orders, blockers`
+	created_at, active_task, open_exit_request, open_orders, blockers, exit_mode`
 
 type row struct {
 	ID, UserID, Email, UserStatus, Name, Lifecycle     string
@@ -87,6 +88,7 @@ type row struct {
 	CreatedAt                                          time.Time
 	ActiveTask, OpenExitReq                            *string
 	OpenOrders, Blockers                               []string
+	ExitMode                                           string
 }
 
 func scanRow(r interface{ Scan(...any) error }) (*row, error) {
@@ -96,7 +98,7 @@ func scanRow(r interface{ Scan(...any) error }) (*row, error) {
 		&x.Bandwidth, &x.PaidUntil, &x.AdminPaused, &x.PausedReason, &x.EntitledBytes, &x.UsedBytes, &x.EntitledSecs, &x.BeforeSecs, &x.FirstReady,
 		&x.PeriodStarted, &x.Expires, &x.RetentionEnds, &x.Released, &x.Deleted, &x.CurAccess, &x.CurExit, &x.DesiredV, &x.AppliedV,
 		&x.ActiveConns, &x.UsageReportedAt, &x.RulesVersion, &x.CreatedFromOrder, &x.CreatedAt, &x.ActiveTask, &x.OpenExitReq,
-		&x.OpenOrders, &x.Blockers)
+		&x.OpenOrders, &x.Blockers, &x.ExitMode)
 	if x.OpenOrders == nil {
 		x.OpenOrders = []string{}
 	}
@@ -130,6 +132,8 @@ type Plan struct {
 	City          string `json:"city"`
 	Concurrency   int    `json:"concurrency"`
 	BandwidthMbps int    `json:"bandwidthMbps"`
+	// ExitMode 是购买时的出口类型：exclusive 独享 / shared 共享（D-24，订单快照）。
+	ExitMode string `json:"exitMode"`
 }
 
 // Time 是 OpenAPI SubscriptionTime。
@@ -157,6 +161,9 @@ type Exit struct {
 	Check       string    `json:"check"`
 	LatencyMs   *int      `json:"latencyMs"`
 	CheckedAt   time.Time `json:"checkedAt"`
+	// SharedCapacity 是共享出口的“最多 N 人共用”（所分配资源的绑定上限）；独享为 null。
+	// 不给当前人数，也不给同出口其他订阅的任何信息（docs/06 §9.1）。
+	SharedCapacity *int `json:"sharedCapacity"`
 }
 
 // Ports 是 OpenAPI Ports。
@@ -210,7 +217,8 @@ func (x *row) plan() *Plan {
 	if x.isDirect() {
 		return nil
 	}
-	return &Plan{Name: x.PlanName, CountryCode: x.CC, Country: x.Country, City: x.City, Concurrency: x.Concurrency, BandwidthMbps: x.Bandwidth}
+	return &Plan{Name: x.PlanName, CountryCode: x.CC, Country: x.Country, City: x.City, Concurrency: x.Concurrency, BandwidthMbps: x.Bandwidth,
+		ExitMode: x.ExitMode}
 }
 
 func (x *row) direct() *Direct {
@@ -293,18 +301,20 @@ type exitRow struct {
 	CreatedAt                                       time.Time
 	ResCC, ResCountry, ResCity                      string
 	ResLastIP                                       *string
+	ExitMode                                        string
+	MaxTenants                                      int
 }
 
 const exitCols = `b.id, b.state, b.resource_id, r.provider, r.protocol, r.host, b.version, r.port, host(b.verified_ip),
 	b.verified_country_code, b.check_result, host(b.check_ip), b.check_country_code, b.check_city, b.check_asn, b.check_error,
 	b.latency_ms, b.checked_at, b.bound_at, b.unbound_at, b.unbound_reason, b.task_id, b.created_at, r.country_code, r.country_name,
-	r.city, host(r.last_exit_ip)`
+	r.city, host(r.last_exit_ip), b.exit_mode, r.max_tenants`
 
 func scanExit(r interface{ Scan(...any) error }) (*exitRow, error) {
 	e := &exitRow{}
 	err := r.Scan(&e.ID, &e.State, &e.ResourceID, &e.Provider, &e.Protocol, &e.Host, &e.Version, &e.Port, &e.VerifiedIP, &e.VerifiedCC,
 		&e.CheckResult, &e.CheckIP, &e.CheckCC, &e.CheckCity, &e.ASN, &e.CheckError, &e.Latency, &e.CheckedAt, &e.BoundAt, &e.UnboundAt,
-		&e.UnboundReason, &e.TaskID, &e.CreatedAt, &e.ResCC, &e.ResCountry, &e.ResCity, &e.ResLastIP)
+		&e.UnboundReason, &e.TaskID, &e.CreatedAt, &e.ResCC, &e.ResCountry, &e.ResCity, &e.ResLastIP, &e.ExitMode, &e.MaxTenants)
 	return e, err
 }
 
@@ -361,8 +371,12 @@ func (e *exitRow) userView(now time.Time, interval time.Duration) *Exit {
 	} else if e.BoundAt != nil {
 		checked = *e.BoundAt
 	}
-	return &Exit{Version: e.Version, IP: kernel.StrOr(e.ip(), ""), CountryCode: *e.cc(), Country: e.ResCountry,
+	v := &Exit{Version: e.Version, IP: kernel.StrOr(e.ip(), ""), CountryCode: *e.cc(), Country: e.ResCountry,
 		City: kernel.StrOr(e.CheckCity, e.ResCity), Check: e.check(now, interval), LatencyMs: e.Latency, CheckedAt: checked.UTC()}
+	if e.ExitMode == "shared" {
+		v.SharedCapacity = kernel.Ptr(e.MaxTenants)
+	}
+	return v
 }
 
 func (s *Service) userView(ctx context.Context, q kernel.Q, now time.Time, x *row) (*View, error) {
@@ -433,6 +447,9 @@ type AdminExit struct {
 	CheckedAt        *time.Time `json:"checkedAt"`
 	CheckError       *string    `json:"checkError"`
 	BoundAt          *time.Time `json:"boundAt"`
+	// ExitMode 与 MaxTenants：该绑定的出口类型与所在资源的绑定上限（D-24）。
+	ExitMode   string `json:"exitMode"`
+	MaxTenants int    `json:"maxTenants"`
 }
 
 // AdminAccess 是 OpenAPI AdminAccess（不含密码）。
@@ -491,7 +508,7 @@ func (e *exitRow) adminView(now time.Time, interval time.Duration) *AdminExit {
 	v := &AdminExit{BindingID: e.ID, Version: e.Version, ResourceID: e.ResourceID, Provider: e.Provider, UpstreamProtocol: e.Protocol,
 		UpstreamAddr: net.JoinHostPort(e.Host, strconv.Itoa(e.Port)), VerifiedIP: e.VerifiedIP, IP: e.CheckIP, CountryCode: e.cc(),
 		Country: e.ResCountry, City: kernel.StrOr(e.CheckCity, e.ResCity), LatencyMs: e.Latency, CheckedAt: kernel.TimePtr(e.CheckedAt),
-		CheckError: e.CheckError, BoundAt: kernel.TimePtr(e.BoundAt)}
+		CheckError: e.CheckError, BoundAt: kernel.TimePtr(e.BoundAt), ExitMode: e.ExitMode, MaxTenants: e.MaxTenants}
 	if e.CheckResult != nil {
 		v.Check = kernel.Ptr(e.check(now, interval))
 	}

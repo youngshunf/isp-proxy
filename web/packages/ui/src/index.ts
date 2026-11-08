@@ -2,7 +2,7 @@
 // 样式：`import '@isp/ui/styles.css'`；字体：`import '@isp/ui/fonts'`。
 export type { MarkShape, StateView, Tone } from './tone'
 export { Plate } from './Plate'
-export { BRAND_COLOR, BrandMark, CountryFlag, SignalBars, StateMark } from './marks'
+export { BRAND_COLOR, BrandMark, CountryFlag, EXIT_MODE_LABEL, ExitModeChip, SignalBars, StateMark } from './marks'
 export { Meter } from './Meter'
 export { theme, FONT_MONO, FONT_SANS } from './theme'
 export {

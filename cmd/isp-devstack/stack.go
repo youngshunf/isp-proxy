@@ -25,28 +25,30 @@ import (
 const seedNodeID = "nod_dev00000000000000001"
 
 // exitSpec 是一个假出口。国家与城市要与 seed-dev 的套餐一致（库存按 国家 + 城市 计档）。
+// maxTenants 是录入时的绑定上限（D-24）：1 只给独享订阅；≥2 可由多个共享订阅共用，空闲时也可整个分给独享订阅。
 type exitSpec struct {
 	label, ip, proto, cc, country, city string
+	maxTenants                          int
 }
 
 var (
 	exitSpecs = []exitSpec{
-		{"exit-A", "203.0.113.10", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶"},
-		{"exit-B", "203.0.113.11", agenttest.UpstreamSOCKS5, "us", "美国", "洛杉矶"},
-		{"exit-C", "203.0.113.12", agenttest.UpstreamHTTPS, "us", "美国", "洛杉矶"},
-		{"exit-D", "203.0.113.13", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶"},
-		{"exit-E", "203.0.113.14", agenttest.UpstreamSOCKS5, "us", "美国", "洛杉矶"},
-		{"exit-F", "203.0.113.15", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶"},
-		{"exit-G", "203.0.113.16", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶"},
-		{"exit-H", "203.0.113.17", agenttest.UpstreamSOCKS5, "us", "美国", "洛杉矶"},
-		{"exit-J1", "203.0.113.20", agenttest.UpstreamSOCKS5, "jp", "日本", "东京"},
-		{"exit-J2", "203.0.113.21", agenttest.UpstreamHTTP, "jp", "日本", "东京"},
-		{"exit-J3", "203.0.113.22", agenttest.UpstreamHTTPS, "jp", "日本", "东京"},
+		{"exit-A", "203.0.113.10", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶", 1},
+		{"exit-B", "203.0.113.11", agenttest.UpstreamSOCKS5, "us", "美国", "洛杉矶", 1},
+		{"exit-C", "203.0.113.12", agenttest.UpstreamHTTPS, "us", "美国", "洛杉矶", 1},
+		{"exit-D", "203.0.113.13", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶", 1},
+		{"exit-E", "203.0.113.14", agenttest.UpstreamSOCKS5, "us", "美国", "洛杉矶", 3},
+		{"exit-F", "203.0.113.15", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶", 3},
+		{"exit-G", "203.0.113.16", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶", 3},
+		{"exit-H", "203.0.113.17", agenttest.UpstreamSOCKS5, "us", "美国", "洛杉矶", 3},
+		{"exit-J1", "203.0.113.20", agenttest.UpstreamSOCKS5, "jp", "日本", "东京", 1},
+		{"exit-J2", "203.0.113.21", agenttest.UpstreamHTTP, "jp", "日本", "东京", 1},
+		{"exit-J3", "203.0.113.22", agenttest.UpstreamHTTPS, "jp", "日本", "东京", 1},
 	}
 	// 备用出口：启动但不录入，供管理后台换出口向导“当场录入候选”使用。
 	spareSpecs = []exitSpec{
-		{"spare-S1", "203.0.113.30", agenttest.UpstreamSOCKS5, "us", "美国", "洛杉矶"},
-		{"spare-S2", "203.0.113.31", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶"},
+		{"spare-S1", "203.0.113.30", agenttest.UpstreamSOCKS5, "us", "美国", "洛杉矶", 1},
+		{"spare-S2", "203.0.113.31", agenttest.UpstreamHTTP, "us", "美国", "洛杉矶", 3},
 	}
 )
 
@@ -466,7 +468,8 @@ func (s *stack) registerExits(ctx context.Context) error {
 	for i, x := range s.exits {
 		var u upstream
 		if err := s.adm.do("POST", "/upstreams", map[string]any{"url": x.url(), "nodeId": s.nodeID, "countryCode": x.spec.cc,
-			"country": x.spec.country, "city": x.spec.city, "provider": "devstack", "note": "开发栈假上游 " + x.spec.label}, &u, ""); err != nil {
+			"country": x.spec.country, "city": x.spec.city, "provider": "devstack", "note": "开发栈假上游 " + x.spec.label,
+			"maxTenants": x.spec.maxTenants}, &u, ""); err != nil {
 			return err
 		}
 		x.resID = u.ID
@@ -505,7 +508,8 @@ func (s *stack) state() State {
 	info := func(xs []*fakeExit) []ExitInfo {
 		var out []ExitInfo
 		for _, x := range xs {
-			out = append(out, ExitInfo{Label: x.spec.label, IP: x.spec.ip, Country: x.spec.cc, City: x.spec.city, URL: x.url(), ResourceID: x.resID})
+			out = append(out, ExitInfo{Label: x.spec.label, IP: x.spec.ip, Country: x.spec.cc, City: x.spec.city, URL: x.url(), ResourceID: x.resID,
+				MaxTenants: x.spec.maxTenants})
 		}
 		return out
 	}
@@ -544,11 +548,16 @@ func (s *stack) printSummary() {
 		if i > 0 {
 			b.WriteString("、")
 		}
-		fmt.Fprintf(&b, "%s %s（%s）", x.Label, x.IP, x.City)
+		mode := "独享"
+		if x.MaxTenants > 1 {
+			mode = fmt.Sprintf("可共享 %d", x.MaxTenants)
+		}
+		fmt.Fprintf(&b, "%s %s（%s，%s）", x.Label, x.IP, x.City, mode)
 	}
+	fmt.Fprintf(&b, "\n  套餐            美国 洛杉矶（独享）、美国 洛杉矶 共享（共享，分到“可共享”的出口）、日本 东京（独享）")
 	fmt.Fprintf(&b, "\n  备用候选上游    （换出口向导里当场录入用）\n")
 	for _, x := range st.Spares {
-		fmt.Fprintf(&b, "                  %s  %s  %s\n", x.Label, x.IP, x.URL)
+		fmt.Fprintf(&b, "                  %s  %s  %s  （建议绑定上限 %d）\n", x.Label, x.IP, x.URL, x.MaxTenants)
 	}
 	fmt.Fprintf(&b, "\n  经接入访问 127.0.0.1 上任意 http 地址的 /ip 返回出口标签（节点只放行 127.0.0.0/8 目标），例如\n  curl -x http://<用户名>:<密码>@127.0.0.1:<端口> %s\n", st.ProbeURL)
 	fmt.Fprintf(&b, "\n  日志 %s/{isp-control,gost}.log；就绪信息 %s/state.json\n", s.dir, s.dir)

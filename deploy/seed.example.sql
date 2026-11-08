@@ -25,9 +25,11 @@ INSERT INTO ports (node_id, port)
 SELECT 'nod_dev00000000000000001', p FROM generate_series(20000, 20999) AS p
 ON CONFLICT (node_id, port) DO NOTHING;
 
-INSERT INTO plans (id, code, status, sort_order) VALUES
-    ('pln_dev00000000000000001', 'us-lax', 'on_sale', 10),
-    ('pln_dev00000000000000002', 'jp-tyo', 'on_sale', 20)
+-- 出口类型（D-24）：us-lax、jp-tyo 为独享；us-lax-shared 为共享（一个出口最多由资源的绑定上限个订阅共用）。
+INSERT INTO plans (id, code, status, sort_order, exit_mode) VALUES
+    ('pln_dev00000000000000001', 'us-lax', 'on_sale', 10, 'exclusive'),
+    ('pln_dev00000000000000002', 'jp-tyo', 'on_sale', 20, 'exclusive'),
+    ('pln_dev00000000000000003', 'us-lax-shared', 'on_sale', 15, 'shared')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO plan_versions (id, plan_id, version, name, country_code, country_name, city, price_cents, period_days,
@@ -35,7 +37,9 @@ INSERT INTO plan_versions (id, plan_id, version, name, country_code, country_nam
     ('plv_dev00000000000000001', 'pln_dev00000000000000001', 1, '美国 洛杉矶（示例）', 'us', '美国', '洛杉矶',
      9900, 30, 50000000000, 50, 20),
     ('plv_dev00000000000000002', 'pln_dev00000000000000002', 1, '日本 东京（示例）', 'jp', '日本', '东京',
-     12900, 30, 30000000000, 30, 20)
+     12900, 30, 30000000000, 30, 20),
+    ('plv_dev00000000000000003', 'pln_dev00000000000000003', 1, '美国 洛杉矶 共享（示例）', 'us', '美国', '洛杉矶',
+     3900, 30, 20000000000, 20, 10)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO traffic_packs (id, code, status, sort_order) VALUES
@@ -48,9 +52,10 @@ INSERT INTO traffic_pack_versions (id, traffic_pack_id, version, bytes, price_ce
     ('tpv_dev00000000000000002', 'tpk_dev00000000000000002', 1, 50000000000, 6000)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO upstream_resources (id, node_id, protocol, host, port, country_code, country_name, city, provider, note, status) VALUES
-    ('res_dev00000000000000001', 'nod_dev00000000000000001', 'socks5', '127.0.0.1', 31081, 'us', '美国', '洛杉矶', 'dev-fake', '开发占位上游', 'available'),
-    ('res_dev00000000000000002', 'nod_dev00000000000000001', 'http',   '127.0.0.1', 31082, 'us', '美国', '洛杉矶', 'dev-fake', '开发占位上游', 'available'),
-    ('res_dev00000000000000003', 'nod_dev00000000000000001', 'socks5', '127.0.0.1', 31083, 'jp', '日本', '东京',   'dev-fake', '开发占位上游', 'available'),
-    ('res_dev00000000000000004', 'nod_dev00000000000000001', 'http',   '127.0.0.1', 31084, 'jp', '日本', '东京',   'dev-fake', '开发占位上游', 'pending_verify')
+-- 绑定上限 max_tenants：1 只给独享订阅；≥2 时空闲时可整个分给一个独享订阅，也可由多个共享订阅共用。
+INSERT INTO upstream_resources (id, node_id, protocol, host, port, country_code, country_name, city, provider, note, status, max_tenants) VALUES
+    ('res_dev00000000000000001', 'nod_dev00000000000000001', 'socks5', '127.0.0.1', 31081, 'us', '美国', '洛杉矶', 'dev-fake', '开发占位上游', 'available', 1),
+    ('res_dev00000000000000002', 'nod_dev00000000000000001', 'http',   '127.0.0.1', 31082, 'us', '美国', '洛杉矶', 'dev-fake', '开发占位上游（可共享）', 'available', 3),
+    ('res_dev00000000000000003', 'nod_dev00000000000000001', 'socks5', '127.0.0.1', 31083, 'jp', '日本', '东京',   'dev-fake', '开发占位上游', 'available', 1),
+    ('res_dev00000000000000004', 'nod_dev00000000000000001', 'http',   '127.0.0.1', 31084, 'jp', '日本', '东京',   'dev-fake', '开发占位上游', 'pending_verify', 1)
 ON CONFLICT (id) DO NOTHING;

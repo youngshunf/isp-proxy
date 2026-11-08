@@ -80,6 +80,16 @@ func CurrentPlanVersion(ctx context.Context, q kernel.Q, planID string) (*PlanVe
 	return v, status, err
 }
 
+// PlanExitMode 读套餐的出口类型（exclusive / shared，D-24）。
+func PlanExitMode(ctx context.Context, q kernel.Q, planID string) (string, error) {
+	var m string
+	err := q.QueryRow(ctx, `SELECT exit_mode FROM plans WHERE id = $1`, planID).Scan(&m)
+	if kernel.IsNoRows(err) {
+		return "", httpx.NotFound("套餐不存在或已下架")
+	}
+	return m, err
+}
+
 // PackVersion 是流量包版本。
 type PackVersion struct {
 	ID        string           `json:"id"`
@@ -134,7 +144,9 @@ type PlanView struct {
 	IncludedBytes int64        `json:"includedBytes"`
 	Concurrency   int          `json:"concurrency"`
 	BandwidthMbps int          `json:"bandwidthMbps"`
-	Stock         string       `json:"stock"`
+	// ExitMode 是出口类型：exclusive 独享 / shared 共享（D-24）。
+	ExitMode string `json:"exitMode"`
+	Stock    string `json:"stock"`
 }
 
 // PackView 是 OpenAPI TrafficPack。
@@ -190,7 +202,7 @@ func (s *Service) GetCatalog(ctx context.Context) (*Catalog, error) {
 		c.MonthOptions = append(c.MonthOptions, int(m))
 	}
 	rows, err := q.Query(ctx, `SELECT DISTINCT ON (p.id) p.id, p.sort_order, v.id, v.country_code, v.country_name, v.city, v.price_cents,
-	                              v.included_bytes, v.concurrency, v.bandwidth_mbps
+	                              v.included_bytes, v.concurrency, v.bandwidth_mbps, p.exit_mode
 	                            FROM plans p JOIN plan_versions v ON v.plan_id = p.id
 	                           WHERE p.status = 'on_sale' ORDER BY p.id, v.version DESC`)
 	if err != nil {
@@ -205,7 +217,7 @@ func (s *Service) GetCatalog(ctx context.Context) (*Catalog, error) {
 		var p planRow
 		var price int64
 		if err := rows.Scan(&p.ID, &p.sort, &p.VersionID, &p.CountryCode, &p.Country, &p.City, &price, &p.IncludedBytes,
-			&p.Concurrency, &p.BandwidthMbps); err != nil {
+			&p.Concurrency, &p.BandwidthMbps, &p.ExitMode); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -218,7 +230,8 @@ func (s *Service) GetCatalog(ctx context.Context) (*Catalog, error) {
 	}
 	sortPlans(plans, func(p planRow) (int, string) { return p.sort, p.ID })
 	for _, p := range plans {
-		avail, _, _, err := inventory.StockCounts(ctx, q, p.CountryCode, p.City)
+		// 库存提示：独享为空闲资源数，共享为剩余名额数（R-16.7）；对客户只给档位。
+		avail, _, _, err := inventory.StockCounts(ctx, q, p.ExitMode, p.CountryCode, p.City)
 		if err != nil {
 			return nil, err
 		}
@@ -283,6 +296,7 @@ type AdminPlan struct {
 	Code      string        `json:"code"`
 	Status    string        `json:"status"`
 	SortOrder int           `json:"sortOrder"`
+	ExitMode  string        `json:"exitMode"`
 	Current   PlanVersion   `json:"current"`
 	Stock     PlanStock     `json:"stock"`
 	Versions  []PlanVersion `json:"versions"`
@@ -290,7 +304,8 @@ type AdminPlan struct {
 
 func (s *Service) loadPlan(ctx context.Context, q kernel.Q, id string, allVersions bool) (*AdminPlan, error) {
 	p := &AdminPlan{ID: id}
-	if err := q.QueryRow(ctx, `SELECT code, status, sort_order FROM plans WHERE id = $1`, id).Scan(&p.Code, &p.Status, &p.SortOrder); err != nil {
+	if err := q.QueryRow(ctx, `SELECT code, status, sort_order, exit_mode FROM plans WHERE id = $1`, id).
+		Scan(&p.Code, &p.Status, &p.SortOrder, &p.ExitMode); err != nil {
 		if kernel.IsNoRows(err) {
 			return nil, httpx.NotFound("没有找到这个套餐")
 		}
@@ -319,7 +334,7 @@ func (s *Service) loadPlan(ctx context.Context, q kernel.Q, id string, allVersio
 	if !allVersions {
 		p.Versions = p.Versions[:1]
 	}
-	a, r, b, err := inventory.StockCounts(ctx, q, p.Current.CountryCode, p.Current.City)
+	a, r, b, err := inventory.StockCounts(ctx, q, p.ExitMode, p.Current.CountryCode, p.Current.City)
 	if err != nil {
 		return nil, err
 	}
@@ -367,10 +382,17 @@ func insertPV(ctx context.Context, tx *kernel.Tx, planID string, version int, in
 	return err
 }
 
-// CreatePlan 新建套餐（草稿，含版本 1）。
-func (s *Service) CreatePlan(ctx context.Context, adminID, code string, sort int, in PlanVersionInput) (*AdminPlan, error) {
+// CreatePlan 新建套餐（草稿，含版本 1）。exitMode 为空取 exclusive；出口类型创建后不改（要改请新建套餐），
+// 已下单的订单另有快照（D-24）。
+func (s *Service) CreatePlan(ctx context.Context, adminID, code string, sort int, exitMode string, in PlanVersionInput) (*AdminPlan, error) {
 	if !codeRe.MatchString(code) {
 		return nil, httpx.Invalid("套餐代码只能是小写字母、数字与连字符（2～32 位）")
+	}
+	if exitMode == "" {
+		exitMode = inventory.ModeExclusive
+	}
+	if !inventory.ValidMode(exitMode) {
+		return nil, httpx.Invalid("exitMode 只能是 exclusive 或 shared")
 	}
 	if err := in.validate(); err != nil {
 		return nil, err
@@ -378,8 +400,8 @@ func (s *Service) CreatePlan(ctx context.Context, adminID, code string, sort int
 	var p *AdminPlan
 	err := s.env.InTx(ctx, func(tx *kernel.Tx) error {
 		id := store.NewID("pln")
-		_, err := tx.Exec(ctx, `INSERT INTO plans (id, code, sort_order, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-			id, code, sort, adminID, tx.Now())
+		_, err := tx.Exec(ctx, `INSERT INTO plans (id, code, sort_order, exit_mode, created_by, created_at, updated_at)
+		                        VALUES ($1, $2, $3, $4, $5, $6, $6)`, id, code, sort, exitMode, adminID, tx.Now())
 		if store.IsUniqueViolation(err, "") {
 			return httpx.Conflict("套餐代码已存在")
 		}
@@ -389,7 +411,7 @@ func (s *Service) CreatePlan(ctx context.Context, adminID, code string, sort int
 		if err := insertPV(ctx, tx, id, 1, in, adminID); err != nil {
 			return err
 		}
-		if err := tx.Audit(ctx, adminID, "plan.create", "plan:"+id, map[string]any{"code": code, "version": in}); err != nil {
+		if err := tx.Audit(ctx, adminID, "plan.create", "plan:"+id, map[string]any{"code": code, "exitMode": exitMode, "version": in}); err != nil {
 			return err
 		}
 		p, err = s.loadPlan(ctx, tx, id, true)
@@ -794,6 +816,7 @@ func (s *Service) Routes() []httpx.Route {
 	type createPlan struct {
 		Code      string           `json:"code"`
 		SortOrder int              `json:"sortOrder"`
+		ExitMode  string           `json:"exitMode"`
 		Version   PlanVersionInput `json:"version"`
 	}
 	type createPack struct {
@@ -820,7 +843,7 @@ func (s *Service) Routes() []httpx.Route {
 			if err != nil {
 				return 0, nil, err
 			}
-			v, err := s.CreatePlan(r.Context(), a.AdminID, in.Code, in.SortOrder, in.Version)
+			v, err := s.CreatePlan(r.Context(), a.AdminID, in.Code, in.SortOrder, in.ExitMode, in.Version)
 			return 201, v, err
 		})},
 		{Method: "GET", Pattern: "/admin-api/plans/{planId}", Auth: httpx.Admin, Handler: ah(func(r *http.Request, _ ap) (int, any, error) {
