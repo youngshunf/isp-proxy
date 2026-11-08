@@ -1,11 +1,12 @@
 // 套餐与流量包（R-12）：编辑即发布新版本；已下单与已开通的订阅继续按原版本执行，新订单使用新版本。
 // 上架 / 下架只影响新订单；版本历史可展开查看。
+// 出口类型（D-24）：独享 / 共享在新建时选定，之后不能改（已售订阅按购买时的类型执行）。
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Input, InputNumber, Segmented, Select, Space, Table, Tabs } from 'antd'
 import { useState } from 'react'
-import type { AdminPlan, AdminTrafficPack, PlanVersionInput, SaleStatus } from '@isp/api-client/admin'
-import { CountryFlag, GB, Plate, fmtBytes, fmtDateTime, fmtMoney } from '@isp/ui'
+import type { AdminPlan, AdminTrafficPack, ExitMode, PlanVersionInput, SaleStatus } from '@isp/api-client/admin'
+import { CountryFlag, ExitModeChip, GB, Plate, fmtBytes, fmtDateTime, fmtMoney } from '@isp/ui'
 import { qk, useApi } from '../app/api'
 import { LoadError, Loading, Mono, PageHead, State } from '../components/bits'
 import { ConfirmAction } from '../components/ConfirmAction'
@@ -75,6 +76,7 @@ function PlanTable() {
               </span>
             ),
           },
+          { title: '出口', render: (_, p) => <ExitModeChip mode={p.exitMode} /> },
           { title: '月价', align: 'right', render: (_, p) => <span className="amount">{fmtMoney(p.current.price)}</span> },
           { title: '含流量', align: 'right', render: (_, p) => fmtBytes(p.current.includedBytes) },
           { title: '规格', render: (_, p) => `${p.current.concurrency} 并发 · ${p.current.bandwidthMbps} Mbps · ${p.current.periodDays} 天` },
@@ -84,7 +86,7 @@ function PlanTable() {
               <div className="cell-stack">
                 <State view={{ plenty: { label: '充足', tone: 'ok', shape: 'filled' }, low: { label: '偏少', tone: 'warn', shape: 'half' }, out: { label: '售罄', tone: 'stop', shape: 'hollow' } }[p.stock.level] as never} strong={false} />
                 <span className="muted">
-                  可售 {p.stock.available} · 预留 {p.stock.reserved} · 占用 {p.stock.bound}
+                  {p.exitMode === 'shared' ? '剩余名额' : '可售'} {p.stock.available} · 预留 {p.stock.reserved} · 占用 {p.stock.bound}
                 </span>
               </div>
             ),
@@ -149,6 +151,7 @@ function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () =>
   const { message } = App.useApp()
   const c = plan?.current
   const [code, setCode] = useState('')
+  const [exitMode, setExitMode] = useState<ExitMode>('exclusive')
   const [v, setV] = useState<PlanVersionInput>(
     c
       ? { name: c.name, countryCode: c.countryCode, country: c.country, city: c.city, price: c.price, periodDays: c.periodDays, includedBytes: c.includedBytes, concurrency: c.concurrency, bandwidthMbps: c.bandwidthMbps }
@@ -177,12 +180,18 @@ function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () =>
       impacts={
         plan
           ? [...(diffs.length ? diffs : ['还没有改动']), '已下单（含待核款）与已开通的订阅继续按原版本；新订单与续费按新版本。', '旧版本保留在历史中，不能修改或删除。']
-          : ['新建的套餐为“草稿”，上架后才出现在用户端。']
+          : [
+              '新建的套餐为“草稿”，上架后才出现在用户端。',
+              exitMode === 'shared'
+                ? '共享：每个订阅分到一个绑定上限 ≥2 的资源上的名额，同一出口最多由该资源的上限个订阅共用；库存按剩余名额计。'
+                : '独享：每个订阅独占一个出口资源（优先分配绑定上限为 1 的资源）。',
+              '出口类型创建后不能修改。',
+            ]
       }
       onConfirm={() =>
         plan
           ? api.adminCreatePlanVersion({ planId: plan.id, body: { ...v, name: v.name.trim(), city: v.city.trim() } })
-          : api.adminCreatePlan({ body: { code, version: { ...v, name: v.name.trim(), city: v.city.trim() } } })
+          : api.adminCreatePlan({ body: { code, exitMode, version: { ...v, name: v.name.trim(), city: v.city.trim() } } })
       }
       onDone={() => {
         message.success(plan ? '已发布新版本' : '已创建草稿')
@@ -197,6 +206,29 @@ function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () =>
             </span>
             <Input aria-label="套餐代码" className="mono" value={code} onChange={(e) => setCode(e.target.value)} placeholder="us-sea" />
           </label>
+        )}
+        {!plan ? (
+          <div className="field full" style={{ marginTop: 12 }}>
+            <span className="field-label" id="exit-mode-label">
+              出口类型<em>创建后不能改</em>
+            </span>
+            <Segmented
+              aria-labelledby="exit-mode-label"
+              value={exitMode}
+              onChange={(x) => setExitMode(x as ExitMode)}
+              options={[
+                { value: 'exclusive', label: '独享' },
+                { value: 'shared', label: '共享' },
+              ]}
+            />
+          </div>
+        ) : (
+          <div className="field full" style={{ marginBottom: 12 }}>
+            <span className="field-label">出口类型<em>不能改</em></span>
+            <span>
+              <ExitModeChip mode={plan.exitMode} />
+            </span>
+          </div>
         )}
         <label className="field full" style={{ marginTop: plan ? 0 : 12 }}>
           <span className="field-label">名称</span>

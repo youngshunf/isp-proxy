@@ -7,7 +7,7 @@ import { api, errorText, qk } from '../app/api'
 import { useTitle } from '../app/Shell'
 import { useIntentKey } from '../lib/intent'
 import { OrderSummary } from '../components/OrderSummary'
-import { CountryFlag } from '@isp/ui'
+import { CountryFlag, ExitModeChip } from '@isp/ui'
 import { Plate } from '@isp/ui'
 import { fmtBytes, fmtMoney } from '../lib/format'
 
@@ -54,7 +54,7 @@ export default function BuyPage() {
   const lines = plan
     ? [
         {
-          label: `${plan.country} · ${plan.city} 包月`,
+          label: `${plan.country} · ${plan.city} ${plan.exitMode === 'shared' ? '共享' : ''}包月`,
           detail: `${m} 个月 · 含 ${fmtBytes(plan.includedBytes)}`,
           amount: { amount: plan.monthlyPrice.amount * m, currency: 'CNY' as const },
         },
@@ -67,7 +67,7 @@ export default function BuyPage() {
         <div>
           <h1>购买 IP</h1>
           <div className="page-head-sub">
-            每个 IP 独享一个出口；时长按 {c.rules.periodDays} 天一个月，含流量长期保留。一次订单购买 1 个 IP，需要多个请分别下单。
+            独享套餐的 IP 单独占用一个出口，共享套餐与其他订阅共用一个出口、价格更低；时长按 {c.rules.periodDays} 天一个月，含流量长期保留。一次订单购买 1 个 IP，需要多个请分别下单。
           </div>
         </div>
       </div>
@@ -78,6 +78,7 @@ export default function BuyPage() {
                 <thead>
                   <tr>
                     <th>地区</th>
+                    <th>出口</th>
                     <th className="num">包月价</th>
                     <th className="num">含流量</th>
                     <th>并发 / 带宽</th>
@@ -96,12 +97,20 @@ export default function BuyPage() {
                       >
                         <td>
                           <span className="region">
-                            <Radio checked={selected} disabled={out} onChange={() => setPlanId(p.id)} aria-label={`${p.country} ${p.city}`} />
+                            <Radio
+                              checked={selected}
+                              disabled={out}
+                              onChange={() => setPlanId(p.id)}
+                              aria-label={p.exitMode === 'shared' ? `${p.country} ${p.city} 共享` : `${p.country} ${p.city}`}
+                            />
                             <CountryFlag code={p.countryCode} name={p.country} size="sm" />
                             <span>
                               {p.country} · {p.city}
                             </span>
                           </span>
+                        </td>
+                        <td className="c-mode">
+                          <ExitModeChip mode={p.exitMode} />
                         </td>
                         <td className="num">
                           <span className="price">
@@ -147,6 +156,7 @@ export default function BuyPage() {
           lines={lines}
           rules={[
             plan ? `时长 ${m * c.rules.periodDays} 天 + 流量 ${fmtBytes(plan.includedBytes)}` : '时长与流量随套餐发放',
+            ...(plan?.exitMode === 'shared' ? ['共享出口：与其他订阅共用一个出口 IP，接入与流量各自独立'] : []),
             '时长在开通就绪时起算，不在付款时起算',
             '流量长期保留，不按月清零；到期也不清余额',
             '时长到期或流量用尽，任一发生即停止转发',

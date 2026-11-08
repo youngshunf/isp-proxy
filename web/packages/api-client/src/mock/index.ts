@@ -57,12 +57,14 @@ function seed(now: number) {
   const catalog: Catalog = {
     brand: 'ISP 代理（演示）',
     plans: [
-      { id: 'us-lax', versionId: 'us-lax-v1', countryCode: 'us', country: '美国', city: '洛杉矶', monthlyPrice: cny(168), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
-      { id: 'us-nyc', versionId: 'us-nyc-v1', countryCode: 'us', country: '美国', city: '纽约', monthlyPrice: cny(178), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'low' },
-      { id: 'gb-lon', versionId: 'gb-lon-v1', countryCode: 'gb', country: '英国', city: '伦敦', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
-      { id: 'de-fra', versionId: 'de-fra-v1', countryCode: 'de', country: '德国', city: '法兰克福', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
-      { id: 'jp-tyo', versionId: 'jp-tyo-v1', countryCode: 'jp', country: '日本', city: '东京', monthlyPrice: cny(198), includedBytes: 100 * GB, concurrency: 80, bandwidthMbps: 30, stock: 'low' },
-      { id: 'sg-sin', versionId: 'sg-sin-v1', countryCode: 'sg', country: '新加坡', city: '新加坡', monthlyPrice: cny(158), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'out' },
+      { id: 'us-lax', versionId: 'us-lax-v1', exitMode: 'exclusive', countryCode: 'us', country: '美国', city: '洛杉矶', monthlyPrice: cny(168), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      // 共享出口套餐（D-24）：同一出口最多由 N 个订阅共用，价格更低。
+      { id: 'us-lax-shared', versionId: 'us-lax-shared-v1', exitMode: 'shared', countryCode: 'us', country: '美国', city: '洛杉矶', monthlyPrice: cny(68), includedBytes: 20 * GB, concurrency: 20, bandwidthMbps: 10, stock: 'plenty' },
+      { id: 'us-nyc', versionId: 'us-nyc-v1', exitMode: 'exclusive', countryCode: 'us', country: '美国', city: '纽约', monthlyPrice: cny(178), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'low' },
+      { id: 'gb-lon', versionId: 'gb-lon-v1', exitMode: 'exclusive', countryCode: 'gb', country: '英国', city: '伦敦', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      { id: 'de-fra', versionId: 'de-fra-v1', exitMode: 'exclusive', countryCode: 'de', country: '德国', city: '法兰克福', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      { id: 'jp-tyo', versionId: 'jp-tyo-v1', exitMode: 'exclusive', countryCode: 'jp', country: '日本', city: '东京', monthlyPrice: cny(198), includedBytes: 100 * GB, concurrency: 80, bandwidthMbps: 30, stock: 'low' },
+      { id: 'sg-sin', versionId: 'sg-sin-v1', exitMode: 'exclusive', countryCode: 'sg', country: '新加坡', city: '新加坡', monthlyPrice: cny(158), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'out' },
     ],
     trafficPacks: [
       { id: 't10', versionId: 't10-v1', bytes: 10 * GB, price: cny(18) },
@@ -102,11 +104,11 @@ function seed(now: number) {
       sub: {
         id: 'sub_7k2m',
         name: 'TikTok 美区 1 号',
-        plan: { name: '美国 · 洛杉矶 包月', countryCode: 'us', country: '美国', city: '洛杉矶', concurrency: 50, bandwidthMbps: 20 },
+        plan: { name: '美国 · 洛杉矶 包月', exitMode: 'exclusive', countryCode: 'us', country: '美国', city: '洛杉矶', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'active',
         time: { periodDays: 60, startedAt: iso(now - 37 * DAY), expiresAt: iso(now + 23 * DAY + 4 * HOUR), retentionEndsAt: null },
         traffic: { totalBytes: 100 * GB, usedBytes: 61.8 * GB },
-        exit: { version: 2, ip: '203.0.113.48', countryCode: 'us', country: '美国', city: '洛杉矶', check: 'ok', latencyMs: 182, checkedAt: iso(now - 6 * 60_000) },
+        exit: { version: 2, ip: '203.0.113.48', sharedCapacity: null, countryCode: 'us', country: '美国', city: '洛杉矶', check: 'ok', latencyMs: 182, checkedAt: iso(now - 6 * 60_000) },
         access: access(2, 'u7k2m', 'Qm4vT9xRb2Lp', 31080, now - 18 * DAY),
         quotas: { accessChangesLeft: 5, accessChangesPerDay: 5, freeExitChangesLeft: 0, freeExitWindowEndsAt: iso(now + 12 * DAY) },
         openExitRequestId: null,
@@ -121,14 +123,33 @@ function seed(now: number) {
       ],
     },
     {
+      // 共享出口（D-24）：用户只看到“共享 · 最多 N 人共用”，看不到同出口的其他订阅与当前人数。
+      sub: {
+        id: 'sub_h8sc',
+        name: '账号养号 · 共享',
+        plan: { name: '美国 · 洛杉矶 共享包月', exitMode: 'shared', countryCode: 'us', country: '美国', city: '洛杉矶', concurrency: 20, bandwidthMbps: 10 },
+        lifecycle: 'active',
+        time: { periodDays: 30, startedAt: iso(now - 6 * DAY), expiresAt: iso(now + 24 * DAY), retentionEndsAt: null },
+        traffic: { totalBytes: 20 * GB, usedBytes: 3.2 * GB },
+        exit: { version: 1, ip: '203.0.113.61', sharedCapacity: 3, countryCode: 'us', country: '美国', city: '洛杉矶', check: 'ok', latencyMs: 204, checkedAt: iso(now - 5 * 60_000) },
+        access: access(1, 'uh8sc', 'Rt7kD2pXw4Nm', 31580, now - 6 * DAY),
+        quotas: { accessChangesLeft: 5, accessChangesPerDay: 5, freeExitChangesLeft: 1, freeExitWindowEndsAt: null },
+        openExitRequestId: null,
+        openOrderIds: [],
+      },
+      events: [
+        { id: 'e1', at: iso(now - 6 * DAY), kind: 'ready', detail: '开通就绪，开始计时；共享出口 203.0.113.61，接入 v1', orderNo: 'ORD-20261101-0027' },
+      ],
+    },
+    {
       sub: {
         id: 'sub_d3fq',
         name: '亚马逊德国店',
-        plan: { name: '德国 · 法兰克福 包月', countryCode: 'de', country: '德国', city: '法兰克福', concurrency: 50, bandwidthMbps: 20 },
+        plan: { name: '德国 · 法兰克福 包月', exitMode: 'exclusive', countryCode: 'de', country: '德国', city: '法兰克福', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'active',
         time: { periodDays: 30, startedAt: iso(now - 28 * DAY), expiresAt: iso(now + 2 * DAY + 6 * HOUR), retentionEndsAt: null },
         traffic: { totalBytes: 50 * GB, usedBytes: 46.9 * GB },
-        exit: { version: 1, ip: '198.51.100.23', countryCode: 'de', country: '德国', city: '法兰克福', check: 'ok', latencyMs: 236, checkedAt: iso(now - 11 * 60_000) },
+        exit: { version: 1, ip: '198.51.100.23', sharedCapacity: null, countryCode: 'de', country: '德国', city: '法兰克福', check: 'ok', latencyMs: 236, checkedAt: iso(now - 11 * 60_000) },
         access: access(1, 'ud3fq', 'Hs8nW2kZp6Ye', 31180, now - 28 * DAY),
         quotas: { accessChangesLeft: 5, accessChangesPerDay: 5, freeExitChangesLeft: 1, freeExitWindowEndsAt: null },
         openExitRequestId: null,
@@ -142,11 +163,11 @@ function seed(now: number) {
       sub: {
         id: 'sub_j9tx',
         name: '采集任务 · 日本',
-        plan: { name: '日本 · 东京 包月', countryCode: 'jp', country: '日本', city: '东京', concurrency: 80, bandwidthMbps: 30 },
+        plan: { name: '日本 · 东京 包月', exitMode: 'exclusive', countryCode: 'jp', country: '日本', city: '东京', concurrency: 80, bandwidthMbps: 30 },
         lifecycle: 'active',
         time: { periodDays: 30, startedAt: iso(now - 13 * DAY), expiresAt: iso(now + 17 * DAY), retentionEndsAt: null },
         traffic: { totalBytes: 100 * GB, usedBytes: 100 * GB },
-        exit: { version: 1, ip: '203.0.113.112', countryCode: 'jp', country: '日本', city: '东京', check: 'ok', latencyMs: 96, checkedAt: iso(now - 4 * 60_000) },
+        exit: { version: 1, ip: '203.0.113.112', sharedCapacity: null, countryCode: 'jp', country: '日本', city: '东京', check: 'ok', latencyMs: 96, checkedAt: iso(now - 4 * 60_000) },
         access: access(3, 'uj9tx', 'Vb3cK7mQe5Tw', 31280, now - 2 * DAY),
         quotas: { accessChangesLeft: 3, accessChangesPerDay: 5, freeExitChangesLeft: 1, freeExitWindowEndsAt: null },
         openExitRequestId: null,
@@ -163,11 +184,11 @@ function seed(now: number) {
       sub: {
         id: 'sub_s4wp',
         name: 'Shopee 新加坡',
-        plan: { name: '新加坡 包月', countryCode: 'sg', country: '新加坡', city: '新加坡', concurrency: 50, bandwidthMbps: 20 },
+        plan: { name: '新加坡 包月', exitMode: 'exclusive', countryCode: 'sg', country: '新加坡', city: '新加坡', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'retained',
         time: { periodDays: 30, startedAt: iso(now - 33 * DAY), expiresAt: iso(now - 3 * DAY), retentionEndsAt: iso(now + 4 * DAY) },
         traffic: { totalBytes: 50 * GB, usedBytes: 28.6 * GB },
-        exit: { version: 1, ip: '198.51.100.77', countryCode: 'sg', country: '新加坡', city: '新加坡', check: 'stale', latencyMs: null, checkedAt: iso(now - 3 * DAY) },
+        exit: { version: 1, ip: '198.51.100.77', sharedCapacity: null, countryCode: 'sg', country: '新加坡', city: '新加坡', check: 'stale', latencyMs: null, checkedAt: iso(now - 3 * DAY) },
         access: access(1, 'us4wp', 'Pn6xF4tGa8Rk', 31380, now - 33 * DAY),
         quotas: { accessChangesLeft: 5, accessChangesPerDay: 5, freeExitChangesLeft: 1, freeExitWindowEndsAt: null },
         openExitRequestId: null,
@@ -182,7 +203,7 @@ function seed(now: number) {
       sub: {
         id: 'sub_g5ln',
         name: 'TikTok 英国',
-        plan: { name: '英国 · 伦敦 包月', countryCode: 'gb', country: '英国', city: '伦敦', concurrency: 50, bandwidthMbps: 20 },
+        plan: { name: '英国 · 伦敦 包月', exitMode: 'exclusive', countryCode: 'gb', country: '英国', city: '伦敦', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'pending',
         time: { periodDays: 30, startedAt: null, expiresAt: null, retentionEndsAt: null },
         traffic: { totalBytes: 50 * GB, usedBytes: 0 },
@@ -198,11 +219,11 @@ function seed(now: number) {
       sub: {
         id: 'sub_n2ry',
         name: 'Facebook 广告 · 美东',
-        plan: { name: '美国 · 纽约 包月', countryCode: 'us', country: '美国', city: '纽约', concurrency: 50, bandwidthMbps: 20 },
+        plan: { name: '美国 · 纽约 包月', exitMode: 'exclusive', countryCode: 'us', country: '美国', city: '纽约', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'active',
         time: { periodDays: 30, startedAt: iso(now - 9 * DAY), expiresAt: iso(now + 21 * DAY), retentionEndsAt: null },
         traffic: { totalBytes: 50 * GB, usedBytes: 9.4 * GB },
-        exit: { version: 1, ip: '198.51.100.140', countryCode: 'us', country: '美国', city: '纽约', check: 'slow', latencyMs: 912, checkedAt: iso(now - 8 * 60_000) },
+        exit: { version: 1, ip: '198.51.100.140', sharedCapacity: null, countryCode: 'us', country: '美国', city: '纽约', check: 'slow', latencyMs: 912, checkedAt: iso(now - 8 * 60_000) },
         access: access(1, 'un2ry', 'Ju5rY3wNc9Hd', 31480, now - 9 * DAY),
         quotas: { accessChangesLeft: 5, accessChangesPerDay: 5, freeExitChangesLeft: 0, freeExitWindowEndsAt: iso(now + 28 * DAY) },
         openExitRequestId: 'req_0007',
@@ -532,7 +553,7 @@ export function createMockApi(opts: MockOptions = {}): MockPortalApi {
           order = {
             ...base, kind: 'new', amount: cny(yuan), subscriptionId: null, subscriptionName: null,
             lines: [{
-              label: `${plan.country} · ${plan.city} 包月`,
+              label: `${plan.country} · ${plan.city} ${plan.exitMode === 'shared' ? '共享' : ''}包月`,
               detail: `${input.months} 个月 · 含 ${plan.includedBytes / GB} GB · 并发 ${plan.concurrency} · ${plan.bandwidthMbps} Mbps`,
               amount: cny(yuan),
             }],
@@ -542,7 +563,7 @@ export function createMockApi(opts: MockOptions = {}): MockPortalApi {
         } else {
           const s = findSub(input.subscriptionId)
           if (input.kind === 'renew_time') {
-            const plan = db.catalog.plans.find((p) => p.city === s.sub.plan.city)
+            const plan = db.catalog.plans.find((p) => p.city === s.sub.plan.city && p.exitMode === s.sub.plan.exitMode)
             const yuan = ((plan?.monthlyPrice.amount ?? 16800) / 100) * input.months
             order = {
               ...base, kind: 'renew_time', amount: cny(yuan), subscriptionId: s.sub.id, subscriptionName: s.sub.name,

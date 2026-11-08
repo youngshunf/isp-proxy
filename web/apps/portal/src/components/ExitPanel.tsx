@@ -124,7 +124,9 @@ export function ExitPanel({ sub }: { sub: Subscription }) {
   if (!sub.exit) {
     return (
       <Plate title="出口" labelledBy="exit-h">
-        <div className="plate-pad plate-note">开通时在 {sub.plan.country} · {sub.plan.city} 分配，下单不锁定具体地址。</div>
+        <div className="plate-pad plate-note">
+          开通时在 {sub.plan.country} · {sub.plan.city} 分配{sub.plan.exitMode === 'shared' ? '一个共享出口' : '一个独享出口'}，下单不锁定具体地址。
+        </div>
       </Plate>
     )
   }
@@ -136,6 +138,21 @@ export function ExitPanel({ sub }: { sub: Subscription }) {
     <Plate title="出口检测与更换" labelledBy="exit-h" extra={<span className="plate-note">出口 v{sub.exit.version}</span>}>
       <div className="plate-pad">
         <dl className="kv">
+          <dt>出口类型</dt>
+          <dd className="value">
+            {sub.plan.exitMode === 'shared' ? (
+              <>
+                共享{sub.exit.sharedCapacity ? ` · 最多 ${sub.exit.sharedCapacity} 人共用` : ''}
+                <div className="plate-note">这个出口 IP 与其他订阅共用；你的接入、用量与余量单独计算，互不影响。</div>
+              </>
+            ) : (
+              <>
+                独享
+                <div className="plate-note">这个出口 IP 只分配给你一个订阅。</div>
+              </>
+            )}
+          </dd>
+          <dd className="act" />
           <dt>最近检测</dt>
           <dd className="value">
             <span className="signal" style={{ fontSize: 14, color: 'var(--ink)' }}>

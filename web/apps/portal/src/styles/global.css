@@ -875,9 +875,11 @@
     border: 0;
     padding: 2px 10px;
   }
+  .sheet tr.row td.c-mode,
   .sheet tr.row td.c-spec,
   .sheet tr.row td.c-stock {
     grid-column: 1 / -1;
+    order: 1;
     padding-left: 56px;
     color: var(--ink-3);
     font-size: 13px;

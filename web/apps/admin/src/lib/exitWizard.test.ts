@@ -1,7 +1,7 @@
 // 换出口状态机：每一步能否前进、候选被拒的原因。
 import { describe, expect, it } from 'vitest'
-import type { Probe, Task } from '@isp/api-client/admin'
-import { canSubmit, initialWizard, makeWizardReducer, rejectionReasons, type WizardState } from './exitWizard'
+import type { Probe, Task, Upstream } from '@isp/api-client/admin'
+import { canSubmit, candidateFits, initialWizard, makeWizardReducer, rejectionReasons, type WizardState } from './exitWizard'
 
 const reduce = makeWizardReducer('us')
 
@@ -124,5 +124,24 @@ describe('换出口状态机', () => {
     expect(s.step).toBe('submit')
     expect(s.submitError).toMatch(/进行中的任务/)
     expect(reduce(s, { type: 'reset' })).toEqual(initialWizard)
+  })
+})
+
+describe('共享出口（D-24）', () => {
+  const up = (maxTenants: number, occupancy: Upstream['occupancy']) => ({ maxTenants, occupancy }) as Upstream
+  const none = { mode: 'none', used: 0, bound: 0, reserved: 0, cooldown: 0 } as const
+  it('候选按订阅的出口类型过滤', () => {
+    expect(candidateFits(up(1, none), 'shared')).toBe(false)
+    expect(candidateFits(up(3, none), 'shared')).toBe(true)
+    expect(candidateFits(up(3, { mode: 'shared', used: 2, bound: 1, reserved: 0, cooldown: 1 }), 'shared')).toBe(true)
+    expect(candidateFits(up(3, { mode: 'shared', used: 3, bound: 3, reserved: 0, cooldown: 0 }), 'shared')).toBe(false)
+    expect(candidateFits(up(3, { mode: 'exclusive', used: 1, bound: 1, reserved: 0, cooldown: 0 }), 'shared')).toBe(false)
+    expect(candidateFits(up(3, none), 'exclusive')).toBe(true)
+    expect(candidateFits(up(3, { mode: 'shared', used: 1, bound: 1, reserved: 0, cooldown: 0 }), 'exclusive')).toBe(false)
+  })
+  it('共享订阅的平台内独占被拒原因写明是与独享出口同 IP', () => {
+    const p = probe({ comparison: { currentIp: '203.0.113.48', differsFromCurrent: true, uniqueOnPlatform: false, countryMatches: true, passed: false } })
+    expect(rejectionReasons(p, 'us', 'shared')[0]).toMatch(/已被平台内独享订阅使用/)
+    expect(rejectionReasons(p, 'us')[0]).toMatch(/违反独占/)
   })
 })

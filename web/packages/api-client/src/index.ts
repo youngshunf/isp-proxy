@@ -20,6 +20,8 @@ export type SubscriptionEvent = S['SubscriptionEvent']
 export type Money = S['Money']
 export type StockLevel = S['StockLevel']
 export type Plan = S['Plan']
+/** 出口类型（D-24）：exclusive 独享一个出口；shared 与其他订阅共用一个出口（最多 Exit.sharedCapacity 个）。 */
+export type ExitMode = S['ExitMode']
 export type TrafficPack = S['TrafficPack']
 export type Rules = S['Rules']
 export type PaymentInstructions = S['PaymentInstructions']

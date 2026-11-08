@@ -547,6 +547,26 @@ a.stat:hover {
 .cell-stack .muted {
   font-size: 12px;
 }
+/* 共享出口的受影响订阅（D-24）：一行一个订阅，分线分组，不嵌卡片 */
+.tenant-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.tenant-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.tenant-list li:last-child {
+  border-bottom: 0;
+}
+.tenant-list .muted {
+  font-size: 12px;
+}
 .plain-table .ant-table-thead > tr > th:first-child,
 .plain-table .ant-table-tbody > tr > td:first-child {
   padding-left: 22px !important;

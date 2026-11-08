@@ -28,6 +28,8 @@ export interface FormState {
   city: string
   provider: string
   note: string
+  /** 绑定上限（D-24）；null = 新录入时用服务端默认值（core.shared_exit_default_capacity）。 */
+  maxTenants: number | null
 }
 
 export function UpstreamDialog({
@@ -49,7 +51,7 @@ export function UpstreamDialog({
   const qc = useQueryClient()
   const { message } = App.useApp()
   const editing = value && value !== 'new' ? value : null
-  const blank: FormState = { mode: 'url', url: '', protocol: 'socks5', host: '', port: null, username: '', password: '', nodeId: nodes[0]?.value, countryCode: 'us', city: '', provider: '', note: '' }
+  const blank: FormState = { mode: 'url', url: '', protocol: 'socks5', host: '', port: null, username: '', password: '', nodeId: nodes[0]?.value, countryCode: 'us', city: '', provider: '', note: '', maxTenants: null }
   const [f, setF] = useState<FormState>(blank)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -71,6 +73,7 @@ export function UpstreamDialog({
         city: value.city,
         provider: value.provider,
         note: value.note,
+        maxTenants: value.maxTenants,
       })
   }, [value])
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((x) => ({ ...x, [k]: v }))
@@ -95,6 +98,7 @@ export function UpstreamDialog({
             city: f.city.trim(),
             provider: f.provider,
             note: f.note,
+            maxTenants: f.maxTenants !== null && f.maxTenants !== editing.maxTenants ? f.maxTenants : undefined,
           },
         })
         message.success('已保存')
@@ -108,6 +112,7 @@ export function UpstreamDialog({
             city: f.city.trim(),
             provider: f.provider || undefined,
             note: f.note || undefined,
+            maxTenants: f.maxTenants ?? undefined,
           },
         })
         message.success('已录入，状态为“待验证”')
@@ -123,6 +128,7 @@ export function UpstreamDialog({
   }
 
   const connReady = f.mode === 'url' ? f.url.trim().length > 0 : f.host.trim().length > 0 && !!f.port
+  const shared = editing?.occupancy.mode === 'shared' ? editing.occupancy : null
   const ready = connReady && !!f.nodeId && !!f.countryCode && f.city.trim().length > 0
 
   return (
@@ -139,7 +145,12 @@ export function UpstreamDialog({
     >
       <div className="confirm-body">
         {editing?.status === 'bound' && <Callout tone="warn">资源已被订阅占用：只能改地区、供应商与备注；改连接信息要先为订阅换出口。</Callout>}
-        {editing && editing.status !== 'bound' && <Callout tone="info">修改协议、主机、端口、用户名或密码后，资源回到“待验证”，需重新验证才能售卖。</Callout>}
+        {shared && editing?.status !== 'bound' && (
+          <Callout tone="warn">
+            资源上有共享占用 {shared.used}/{editing!.maxTenants}：改连接信息要先为其上的订阅换出口；绑定上限不能低于当前占用，也不能改为 1。
+          </Callout>
+        )}
+        {editing && editing.status !== 'bound' && !shared && <Callout tone="info">修改协议、主机、端口、用户名或密码后，资源回到“待验证”，需重新验证才能售卖。</Callout>}
         {!editing && (
           <Segmented
             value={f.mode}
@@ -195,6 +206,21 @@ export function UpstreamDialog({
           <label className="field" style={{ marginTop: 12 }}>
             <span className="field-label">供应商</span>
             <Input aria-label="供应商" value={f.provider} onChange={(e) => set('provider', e.target.value)} />
+          </label>
+          <label className="field full" style={{ marginTop: 12 }}>
+            <span className="field-label">
+              绑定上限<em>1 只给独享订阅；≥2 时可由多个共享订阅共用，空闲时也可整个分给一个独享订阅</em>
+            </span>
+            <InputNumber
+              aria-label="绑定上限"
+              min={1}
+              max={100}
+              precision={0}
+              value={f.maxTenants}
+              onChange={(v) => set('maxTenants', v)}
+              placeholder="留空用默认值"
+              style={{ width: '100%' }}
+            />
           </label>
           <label className="field full" style={{ marginTop: 12 }}>
             <span className="field-label">备注</span>

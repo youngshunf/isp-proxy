@@ -2,17 +2,18 @@
 // 库存里没有合适候选时可以当场录入：按订阅的节点与套餐地区预填，录入后直接选中。
 // 候选必须由节点经实际链路测出出口 IP；与当前出口相同（“上游已更新但出口没变”）、平台内已占用、国家不符都会被拒，并写明原因。
 // 提交时带比较探测的 ID 和幂等键：同一次比较只能提交一次，重试不会建出两个任务。
+// 共享订阅（D-24）的候选只列有空位的共享资源；独享订阅的候选不含已有共享占用的资源。
 import { ArrowLeftOutlined, CheckOutlined, CloseOutlined, LoadingOutlined, PlusOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Checkbox, Input, Radio, Switch, Table } from 'antd'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import type { AdminSubscriptionDetail, Upstream } from '@isp/api-client/admin'
-import { CountryFlag, Plate, StateMark, fmtDateTime } from '@isp/ui'
+import { CountryFlag, ExitModeChip, Plate, StateMark, fmtDateTime } from '@isp/ui'
 import { errorText, newIdempotencyKey, qk, useApi } from '../app/api'
 import { Callout, LoadError, Loading, Mono, PageHead, State } from '../components/bits'
 import { UpstreamDialog } from '../components/UpstreamDialog'
-import { STEPS, canSubmit, initialWizard, makeWizardReducer, type WizardState } from '../lib/exitWizard'
+import { STEPS, canSubmit, candidateFits, initialWizard, makeWizardReducer, type WizardState } from '../lib/exitWizard'
 import { useProbe, useTask } from '../lib/jobs'
 import { EXIT_REASON, TASK_KIND, TASK_STATE, UPSTREAM } from '../lib/status'
 
@@ -34,7 +35,7 @@ function Wizard({ s }: { s: AdminSubscriptionDetail }) {
     queryFn: () => api.adminGetExitRequest({ exitRequestId: requestId! }),
     enabled: !!requestId,
   })
-  const reducer = useMemo(() => makeWizardReducer(s.plan.countryCode), [s.plan.countryCode])
+  const reducer = useMemo(() => makeWizardReducer(s.plan.countryCode, s.plan.exitMode), [s.plan.countryCode, s.plan.exitMode])
   const [st, dispatch] = useReducer(reducer, initialWizard)
   const stepIndex = STEPS.findIndex((x) => x.key === st.step)
   const live = s.lifecycle === 'active' || s.lifecycle === 'retained'
@@ -53,6 +54,9 @@ function Wizard({ s }: { s: AdminSubscriptionDetail }) {
               套餐国家 <CountryFlag code={s.plan.countryCode} name={s.plan.country} size="sm" /> {s.plan.country}
             </span>
             <span>接入 v{s.access?.version ?? '—'}</span>
+            <span>
+              出口类型 <ExitModeChip mode={s.plan.exitMode} />
+            </span>
           </>
         }
       />
@@ -116,13 +120,19 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: AdminSubscriptionDeta
       setBusy(false)
     }
   }
-  const items = (cands.data?.items ?? []).filter((u) => u.id !== s.exit?.resourceId)
+  const shared = s.plan.exitMode === 'shared'
+  const items = (cands.data?.items ?? []).filter((u) => u.id !== s.exit?.resourceId && candidateFits(u, s.plan.exitMode))
   return (
     <>
       <div className="usage-head">
         <div>
           <h3>选择候选上游</h3>
-          <p className="muted small">只列出“可售”或“待验证”且未被占用的资源。候选会经节点实际链路测出出口 IP，再与当前出口比较。</p>
+          <p className="muted small">
+            {shared
+              ? '共享订阅：只列出绑定上限 ≥2、没有独享订阅且还有空位的资源（不能换到独享出口）。'
+              : '只列出“可售”或“待验证”且未被占用的资源（已有共享订阅的资源不能给独享订阅）。'}
+            候选会经节点实际链路测出出口 IP，再与当前出口比较。
+          </p>
         </div>
         <span className="actions" style={{ alignItems: 'center' }}>
           <label className="small" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
@@ -144,7 +154,7 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: AdminSubscriptionDeta
             pagination={false}
             scroll={{ x: 'max-content' }}
             dataSource={items}
-            locale={{ emptyText: '没有可用候选：先在上游库存录入并验证新资源' }}
+            locale={{ emptyText: shared ? '没有有空位的共享资源：先在上游库存录入资源（绑定上限 ≥2）并验证' : '没有可用候选：先在上游库存录入并验证新资源' }}
             onRow={(u) => ({ onClick: () => dispatch({ type: 'select', resourceId: u.id }), style: { cursor: 'pointer' } })}
             columns={[
               { title: '', width: 40, render: (_, u) => <Radio value={u.id} aria-label={`选择 ${u.protocol}://${u.host}:${u.port}`} /> },
@@ -169,6 +179,17 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: AdminSubscriptionDeta
                 ),
               },
               { title: '状态', render: (_, u) => <State view={UPSTREAM[u.status]} strong={false} /> },
+              {
+                title: '占用',
+                render: (_, u) =>
+                  u.occupancy.mode === 'shared' ? (
+                    <span>
+                      共享 <b className="num">{u.occupancy.used}/{u.maxTenants}</b>
+                    </span>
+                  ) : (
+                    <span className="muted">{u.maxTenants === 1 ? '空闲 · 仅独享' : `空闲 · 上限 ${u.maxTenants}`}</span>
+                  ),
+              },
               {
                 title: '最近验证',
                 render: (_, u) =>

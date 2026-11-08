@@ -1,19 +1,20 @@
 // 上游库存（R-12）：录入（粘贴地址或逐项填写）、编辑（带行版本，防止覆盖别人的修改）、经节点验证、改状态。
 // 上游密码只写不读：接口只返回“是否已设密码”，编辑时留空表示不改。
+// 共享出口（D-24）：占用列显示 x/N（绑定上限），共享资源可查看其上的受影响订阅；隔离或停用时为每个订阅各开一条告警。
 import { EditOutlined, PlusOutlined, RadarChartOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Segmented, Space } from 'antd'
+import { App, Button, Modal, Segmented, Space } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import type { Probe, Upstream, UpstreamStatus } from '@isp/api-client/admin'
+import type { Probe, Upstream, UpstreamStatus, UpstreamTenant } from '@isp/api-client/admin'
 import { CountryFlag, Plate, fmtDateTime } from '@isp/ui'
 import { errorText, qk, useApi } from '../app/api'
-import { Mono, PageHead, State } from '../components/bits'
+import { LoadError, Loading, Mono, PageHead, State } from '../components/bits'
 import { ConfirmAction } from '../components/ConfirmAction'
 import { DataTable, arr, str, type Column, type FilterDef } from '../components/DataTable'
 import { COUNTRIES, UpstreamDialog } from '../components/UpstreamDialog'
 import { useProbe } from '../lib/jobs'
-import { UPSTREAM, options } from '../lib/status'
+import { LIFECYCLE, UPSTREAM, options } from '../lib/status'
 
 export default function UpstreamsPage() {
   const api = useApi()
@@ -21,6 +22,7 @@ export default function UpstreamsPage() {
   const nodes = useQuery({ queryKey: qk.nodes, queryFn: () => api.adminListNodes() })
   const [editing, setEditing] = useState<Upstream | 'new' | null>(sp.get('new') === '1' ? 'new' : null)
   const [statusOf, setStatusOf] = useState<Upstream | null>(null)
+  const [tenantsOf, setTenantsOf] = useState<Upstream | null>(null)
   const [probes, setProbes] = useState<Record<string, Probe>>({})
   const { message } = App.useApp()
 
@@ -92,14 +94,29 @@ export default function UpstreamsPage() {
       key: 'use',
       title: '占用',
       render: (_, u) =>
-        u.boundSubscriptionId ? (
+        u.occupancy.mode === 'shared' ? (
+          <div className="cell-stack">
+            <span>
+              共享 <b className="num">{u.occupancy.used}/{u.maxTenants}</b>
+              {u.occupancy.used >= u.maxTenants && <span className="muted">（满）</span>}
+            </span>
+            <span className="muted">
+              {[u.occupancy.bound && `绑定 ${u.occupancy.bound}`, u.occupancy.reserved && `预留 ${u.occupancy.reserved}`, u.occupancy.cooldown && `冷却 ${u.occupancy.cooldown}`].filter(Boolean).join(' · ')}
+            </span>
+            {u.occupancy.bound + u.occupancy.reserved > 0 && (
+              <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => setTenantsOf(u)}>
+                受影响订阅
+              </Button>
+            )}
+          </div>
+        ) : u.boundSubscriptionId ? (
           <Link to={`/subscriptions/${u.boundSubscriptionId}`}>订阅</Link>
         ) : u.reservedOrderId ? (
           <Link to={`/orders/${u.reservedOrderId}`}>订单预留</Link>
         ) : u.reservedTaskId ? (
           '任务预留'
         ) : (
-          <span className="muted">—</span>
+          <span className="muted">{u.maxTenants === 1 ? '— · 仅独享' : `— · 上限 ${u.maxTenants}`}</span>
         ),
     },
     {
@@ -123,7 +140,7 @@ export default function UpstreamsPage() {
           <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(u)} aria-label={`编辑 ${u.host}`}>
             编辑
           </Button>
-          <Button size="small" onClick={() => setStatusOf(u)} disabled={u.status === 'bound' || u.status === 'reserved'}>
+          <Button size="small" onClick={() => setStatusOf(u)} disabled={u.occupancy.mode !== 'shared' && (u.status === 'bound' || u.status === 'reserved')}>
             状态
           </Button>
         </Space>
@@ -135,7 +152,7 @@ export default function UpstreamsPage() {
     <>
       <PageHead
         title="上游库存"
-        sub="一个上游资源对应一个出口 IP。新录入的资源须经节点验证出口后才能设为可售。"
+        sub="一个上游资源对应一个出口 IP；绑定上限为 1 的只给独享订阅，≥2 的可由多个共享订阅共用。新录入的资源须经节点验证出口后才能设为可售。"
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setEditing('new')}>
             录入上游
@@ -171,6 +188,7 @@ export default function UpstreamsPage() {
         }}
       />
       {statusOf && <StatusDialog u={statusOf} onClose={() => setStatusOf(null)} />}
+      {tenantsOf && <TenantsDialog u={tenantsOf} onClose={() => setTenantsOf(null)} />}
     </>
   )
 }
@@ -209,15 +227,52 @@ function VerifyCell({ probe }: { probe: Probe }) {
   )
 }
 
+/** 受影响订阅：当前在该资源上有待生效或生效出口绑定的订阅（R-11.10）。 */
+function useTenants(u: Upstream, enabled: boolean) {
+  const api = useApi()
+  return useQuery({ queryKey: [...qk.upstreams, u.id, 'detail'], queryFn: () => api.adminGetUpstream({ upstreamId: u.id }), enabled })
+}
+
+function TenantList({ tenants }: { tenants: UpstreamTenant[] }) {
+  if (!tenants.length) return <span className="muted">没有订阅</span>
+  return (
+    <ul className="tenant-list" aria-label="受影响订阅">
+      {tenants.map((t) => (
+        <li key={t.subscriptionId}>
+          <Link to={`/subscriptions/${t.subscriptionId}`}>{t.name}</Link>
+          <span className="muted">
+            {t.userEmail} · {LIFECYCLE[t.lifecycle] ?? t.lifecycle}
+            {t.bindingState === 'pending' ? ' · 切换中' : ''}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function TenantsDialog({ u, onClose }: { u: Upstream; onClose: () => void }) {
+  const q = useTenants(u, true)
+  return (
+    <Modal open title={`受影响订阅 · ${u.host}:${u.port}（${u.occupancy.used}/${u.maxTenants}）`} onCancel={onClose} footer={null} destroyOnHidden>
+      {q.isPending ? <Loading rows={2} /> : q.isError ? <LoadError error={q.error} /> : <TenantList tenants={q.data.tenants} />}
+    </Modal>
+  )
+}
+
 function StatusDialog({ u, onClose }: { u: Upstream; onClose: () => void }) {
   const api = useApi()
   const qc = useQueryClient()
   const { message } = App.useApp()
-  const [to, setTo] = useState<'available' | 'quarantine' | 'retired'>(u.status === 'available' ? 'quarantine' : 'available')
+  const shared = u.occupancy.mode === 'shared' && u.occupancy.bound + u.occupancy.reserved > 0
+  const [to, setTo] = useState<'available' | 'quarantine' | 'retired'>(u.status === 'available' || shared ? 'quarantine' : 'available')
+  const tenants = useTenants(u, shared)
+  const sharedImpact = shared
+    ? [`资源上有 ${u.occupancy.bound + u.occupancy.reserved} 个共享订阅，会为每个订阅各开一条告警；它们需要逐个换出口。`]
+    : []
   const impacts: Record<typeof to, string[]> = {
     available: ['资源进入可售库存，新订单与换出口可以选用它。', u.lastVerify?.ok ? `最近一次验证通过（出口 ${u.lastVerify.exitIp}）。` : '最近一次验证没有通过：服务端会拒绝，请先重新验证。'],
-    quarantine: ['资源退出可售库存，不会被新订单或换出口选中。', '用于疑似被封、质量异常的资源；排查后可恢复为可售。'],
-    retired: ['资源永久停用，不再验证、不再售卖。', '历史绑定记录保留。'],
+    quarantine: ['资源退出可售库存，不会被新订单或换出口选中。', ...sharedImpact, '用于疑似被封、质量异常的资源；排查后可恢复为可售。'],
+    retired: ['资源永久停用，不再验证、不再售卖。', ...sharedImpact, '历史绑定记录保留。'],
   }
   return (
     <ConfirmAction
@@ -243,6 +298,12 @@ function StatusDialog({ u, onClose }: { u: Upstream; onClose: () => void }) {
           { value: 'retired', label: '停用' },
         ]}
       />
+      {shared && to !== 'available' && (
+        <div style={{ marginTop: 12 }}>
+          <span className="field-label">受影响订阅</span>
+          {tenants.isPending ? <Loading rows={1} /> : tenants.isError ? <LoadError error={tenants.error} /> : <TenantList tenants={tenants.data.tenants} />}
+        </div>
+      )}
     </ConfirmAction>
   )
 }

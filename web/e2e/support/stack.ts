@@ -13,6 +13,8 @@ export interface Exit {
   city: string
   url: string
   resourceId?: string
+  /** 绑定上限（D-24）：1 独享，≥2 可共享。 */
+  maxTenants: number
 }
 
 export interface StackState {
