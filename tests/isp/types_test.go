@@ -449,7 +449,7 @@ type AdminPlan struct {
 	Code     string `json:"code"`
 	Status   string `json:"status"`
 	ExitMode string `json:"exitMode"`
-	Current struct {
+	Current  struct {
 		ID      string `json:"id"`
 		Version int    `json:"version"`
 		Price   Money  `json:"price"`
