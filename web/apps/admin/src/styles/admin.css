@@ -60,19 +60,7 @@
 }
 .brand-mark {
   flex: none;
-  width: 22px;
-  height: 28px;
-  background: var(--teal);
-  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 0 100%);
-  display: grid;
-  place-items: center;
-}
-.brand-mark::after {
-  content: '';
-  width: 10px;
-  height: 8px;
-  border-radius: 1.5px;
-  background: #fff;
+  display: block;
 }
 
 .sidenav {

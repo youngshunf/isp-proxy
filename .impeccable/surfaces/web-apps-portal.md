@@ -29,5 +29,5 @@ FINISH：unreviewed and undocumented is unfinished; this build ends with the fin
 
 ## 未决
 
-- 品牌名未定，原型使用占位名“ISP 代理”。
+- 产品名“驿卡 · Yika”（2026-11-08 定）；品牌标与品牌橙的用法见 DESIGN.md Brand Mark Rule。
 - 价格、币种、套餐规格为示意（D-04）。

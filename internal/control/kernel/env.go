@@ -48,7 +48,7 @@ type Config struct {
 	Geo GeoLookup
 	// EchoURL 是探测使用的 IP 回显端点。
 	EchoURL string
-	// Brand 是对客户展示的品牌名（目录 Catalog.brand，前台标题与页头使用；与邮件署名同取 mail.brand）。默认“ISP 代理”。
+	// Brand 是对客户展示的品牌名（目录 Catalog.brand，前台标题与页头使用；与邮件署名同取 mail.brand）。默认“驿卡”。
 	Brand string
 	// ExitCheckInterval 是定时出口检测间隔；超过两倍未更新视为 stale。默认 10 分钟。
 	ExitCheckInterval time.Duration
@@ -118,7 +118,7 @@ func (c Config) withDefaults() Config {
 		c.PortPoolLowRatio = 0.1
 	}
 	if c.Brand == "" {
-		c.Brand = "ISP 代理"
+		c.Brand = "驿卡"
 	}
 	if c.EchoURL == "" {
 		c.EchoURL = "http://127.0.0.1:8099/ip"

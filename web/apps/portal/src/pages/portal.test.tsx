@@ -96,7 +96,7 @@ describe('会话', () => {
     expect(new URLSearchParams(router.state.location.search).get('next')).toBe('/requests')
     expect(await screen.findByText('登录已失效，请重新登录')).toBeTruthy()
     expect(queryClient.getQueryData(['u', 'demo@example.com', 'subs'])).toBeUndefined()
-    await user.type(screen.getByLabelText('邮箱'), 'demo@example.com')
+    await user.type(await screen.findByLabelText('邮箱'), 'demo@example.com') // 登录页按需加载，等它渲染出来
     await user.type(screen.getByLabelText('密码'), 'password-123')
     await user.click(screen.getByRole('button', { name: '登录' }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/requests'))

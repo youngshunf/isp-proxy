@@ -168,7 +168,7 @@ func Render(b Brand, tmpl string, data map[string]string) (subject, body string,
 		return "", "", fmt.Errorf("mail: 未知模板 %q", tmpl)
 	}
 	if b.Name == "" {
-		b.Name = "ISP 代理"
+		b.Name = "驿卡"
 	}
 	return "[" + b.Name + "] " + t.subject, t.body(b, data), nil
 }

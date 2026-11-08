@@ -1,5 +1,5 @@
 ---
-name: ISP 代理（占位名）
+name: 驿卡 Yika
 description: 用户前台：每个 IP 订阅是一张 SIM 卡，卡面是出口，卡托是套餐余量
 colors:
   tray: "#eef1f0"
@@ -139,7 +139,7 @@ components:
     height: "60px"
 ---
 
-# Design System: ISP 代理（占位名）
+# Design System: 驿卡 Yika
 
 ## Overview
 
@@ -187,7 +187,9 @@ components:
 - **阻断 Stop**（stop / stop-tint）：停用、用尽、到期、失败；阻断余量条用 stop-tint 与 #f3d4d1 的 -45° 斜纹空轨。
 
 ### Named Rules
-**The Flag Identity Rule.** 卡面左上角只放出口国家的国旗，用户一眼按国家认卡；国旗是卡面唯一的多彩元素，品牌标、按钮、高亮、价格都不得引入额外装饰色；品牌标里的芯片是白色。
+**The Flag Identity Rule.** 卡面左上角只放出口国家的国旗，用户一眼按国家认卡；国旗是卡面唯一的多彩元素，按钮、高亮、价格都不得引入额外装饰色。
+
+**The Brand Mark Rule.** 产品名“驿卡 · Yika”（“驿”是中转驿站，“驿卡”谐音“一卡”，一张卡一个 IP）。品牌标是切角 SIM 卡轮廓（`viewBox 0 0 64 64`，路径 `M13 3H39L51 15V61H13Z`），卡内白色驿路连接入口与出口两个站点；源文件 `web/apps/*/public/favicon.svg`，组件 `BrandMark`（`@isp/ui`）。品牌色是亮橙 `#F26A10`（`BRAND_COLOR`），**只用于品牌标本身**，不随主题变化，不得用于按钮、链接、状态、高亮或任何界面元素；界面强调色仍是深青。
 
 **The One Operator Rule.** 可操作的东西只用深青。语义色（ok / warn / stop）只报告状态，不做按钮底色；破坏性操作走确认框，影响写在 stop 色提示条里。
 
@@ -238,7 +240,7 @@ components:
 
 ## Shapes
 
-形体语言只有两种：一级容器是右上角 45° 切角的矩形（22px；次级小容器 14px），其余一切是近直角（2px）。切角由 clip-path 实现：外层 1px line 色衬底 + 内层白体同形裁切，形成连续的 1px 描边。状态格贴在切角左侧、顶边对齐，左下两边描线，像卡面上的固定印格。品牌标是同一切角形（7px 切角）的深青小卡，内嵌白色芯片。国旗是唯一的小圆角元素（3px）。
+形体语言只有两种：一级容器是右上角 45° 切角的矩形（22px；次级小容器 14px），其余一切是近直角（2px）。切角由 clip-path 实现：外层 1px line 色衬底 + 内层白体同形裁切，形成连续的 1px 描边。状态格贴在切角左侧、顶边对齐，左下两边描线，像卡面上的固定印格。品牌标是同一切角形的亮橙小卡，内有白色驿路（见 Brand Mark Rule），顶栏 28px。国旗是唯一的小圆角元素（3px）。
 
 **The One Notch Rule.** 每个一级分区是一张切角卡，切角永远在右上；卡内不再嵌套卡片，内部分组用分线或 tray 凹槽。
 
@@ -340,7 +342,7 @@ HTTP / HTTPS / SOCKS5 三钮连成一组，1px line 外框、内部竖分线，3
 - **Do** 尊重 `prefers-reduced-motion`：动画与过渡压到 1ms。
 
 ### Don't:
-- **Don't** 用 emoji 国旗（Windows 上显示为字母）或在国旗之外引入装饰色（含品牌标、高亮、价格、按钮）。
+- **Don't** 用 emoji 国旗（Windows 上显示为字母）或在国旗之外引入装饰色（含高亮、价格、按钮）；也不要把品牌橙用到品牌标以外的地方。
 - **Don't** 把前台排成"左侧导航 + 统计卡 + 代理表格"的控制台。
 - **Don't** 在切角卡里再嵌套卡片，或给一级容器加圆角。
 - **Don't** 给按钮加投影，或对切角容器用 box-shadow（会被 clip-path 裁掉）。

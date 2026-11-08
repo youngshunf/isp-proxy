@@ -69,3 +69,21 @@ export function SignalBars({ bars, tone, outline = false }: { bars: number; tone
     </svg>
   )
 }
+
+/** 品牌色：只用于品牌标记，不进入界面配色（界面强调色仍是青绿 --teal）。 */
+export const BRAND_COLOR = '#F26A10'
+
+/**
+ * 驿卡品牌标记：切角 SIM 卡轮廓里，入口与出口两个站点由一段驿路相连。
+ * 与 public/favicon.svg 同一几何；颜色固定，不随主题变化。
+ */
+export function BrandMark({ size = 28 }: { size?: number }) {
+  return (
+    <svg className="brand-mark" width={size} height={size} viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+      <path d="M13 3H39L51 15V61H13Z" fill={BRAND_COLOR} />
+      <path d="M24 49V37H40V25" fill="none" stroke="#fff" strokeWidth="3.5" />
+      <circle cx="24" cy="49" r="4.5" fill="#fff" />
+      <circle cx="40" cy="25" r="4.5" fill="#fff" />
+    </svg>
+  )
+}

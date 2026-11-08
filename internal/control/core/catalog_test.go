@@ -12,7 +12,7 @@ func TestCatalogCarriesBrand(t *testing.T) {
 		} `json:"plans"`
 	}
 	x.ok(x.do(who{}, "GET", "/api/catalog", nil), 200, &c)
-	if c.Brand != "ISP 代理" || len(c.Plans) != 1 {
+	if c.Brand != "驿卡" || len(c.Plans) != 1 {
 		t.Fatalf("目录应带默认品牌名与上架套餐: %+v", c)
 	}
 }

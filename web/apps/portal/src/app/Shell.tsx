@@ -10,6 +10,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Dropdown, Result, Spin } from 'antd'
 import { Suspense, useEffect, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
+import { BrandMark } from '@isp/ui'
 import { TZ_LABEL } from '../lib/format'
 import { USE_MOCK, api, errorText, qk, setQueryUser } from './api'
 
@@ -37,7 +38,7 @@ export function Brand() {
   const brand = useBrand()
   return (
     <Link to="/ips" className="brand" aria-label={`${brand ?? '首页'}，返回我的 IP`}>
-      <span className="brand-mark" aria-hidden="true" />
+      <BrandMark />
       <span className="brand-name">{brand ?? '\u00a0'}</span>
     </Link>
   )

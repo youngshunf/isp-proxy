@@ -10,7 +10,7 @@ trusted_proxies:
   - 127.0.0.1
   - ::1
 # 显示在管理员验证器 App 中的名称。
-totp_issuer: 示例代理管理后台
+totp_issuer: 驿卡管理后台
 
 # 节点内部接口（mTLS，节点证书 CN = node:<节点 ID>）。只对节点开放，不经过反向代理。
 agent:
@@ -44,8 +44,8 @@ core:
 mail:
   # smtp：生产；file：开发与测试，把邮件写成 .eml 文件，不发真实邮件。
   mode: smtp
-  from: 示例代理 <no-reply@example.com>
-  brand: 示例代理
+  from: 驿卡 <no-reply@example.com>
+  brand: 驿卡
   site_url: https://portal.example.com
   smtp_addr: smtp.example.com:587
   smtp_security: starttls

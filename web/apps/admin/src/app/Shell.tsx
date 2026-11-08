@@ -17,7 +17,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Drawer, Spin } from 'antd'
 import { Suspense, useEffect, useState, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
-import { TZ_LABEL } from '@isp/ui'
+import { BrandMark, TZ_LABEL } from '@isp/ui'
 import { USE_MOCK, qk, useApi } from './api'
 
 export function ProtoRibbon() {
@@ -28,9 +28,9 @@ export function ProtoRibbon() {
 export function Brand() {
   return (
     <Link to="/" className="brand" aria-label="管理后台首页">
-      <span className="brand-mark" aria-hidden="true" />
+      <BrandMark />
       <span>
-        ISP 代理<small>管理后台</small>
+        驿卡<small>管理后台</small>
       </span>
     </Link>
   )

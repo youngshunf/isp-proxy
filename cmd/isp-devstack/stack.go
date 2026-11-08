@@ -250,7 +250,7 @@ func (s *stack) startControl(ctx context.Context) error {
 	cfg := fmt.Sprintf(`# isp-devstack 生成，只用于本机开发
 listen: %s
 secure_cookies: false
-totp_issuer: ISP 代理（开发）
+totp_issuer: 驿卡（开发）
 agent:
   listen: %s
   ca_file: %s
@@ -260,8 +260,8 @@ agent:
 mail:
   mode: file
   file_dir: %s
-  from: ISP 代理（开发） <no-reply@dev.test>
-  brand: ISP 代理（开发）
+  from: 驿卡（开发） <no-reply@dev.test>
+  brand: 驿卡（开发）
   site_url: %s
 log:
   level: info

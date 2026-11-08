@@ -92,7 +92,7 @@ func New(pool *pgxpool.Pool, cfg Config) *Service {
 		cfg.Limits.MFAPerAdmin = DefaultLimits.MFAPerAdmin
 	}
 	if cfg.Issuer == "" {
-		cfg.Issuer = "ISP 代理管理后台"
+		cfg.Issuer = "驿卡管理后台"
 	}
 	if cfg.SessionTTL <= 0 {
 		cfg.SessionTTL = 12 * time.Hour
