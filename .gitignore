@@ -60,3 +60,7 @@ __pycache__/
 /dev-certs/
 /var/
 /isp-control
+
+# 部署：目标服务器配置（含真实地址）与本机编译缓存
+/deploy/remote/targets/
+/.cache/

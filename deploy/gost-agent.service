@@ -1,6 +1,6 @@
 # /etc/systemd/system/gost-agent.service —— 带 agent 的 GOST 数据面（示例）。
 # 接入端口由控制面下发（端口池默认 20000-29999）；不开放 GOST 原生 API（docs/06 §2）。
-# -agent-config 参数由 M3（A-W8）接入 cmd/gost，此单元在那之前只作占位。
+# deploy/remote/server.sh 原样安装本单元，并生成 /etc/gost-agent/agent.yaml。
 [Unit]
 Description=GOST data plane with ISP agent
 After=network-online.target

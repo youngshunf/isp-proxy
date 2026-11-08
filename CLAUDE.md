@@ -40,6 +40,7 @@ make all
 | `internal/control/admin/` | 管理员（C-W8）：密码 + TOTP 两步登录（首次绑定、恢复码）、管理员会话、用户管理、审计查询、`admin.Create`（CLI） |
 | `internal/control/{audit,mail,session,ratelimit,secret}/` | 审计写入（`audit.Record(ctx, tx, …)`）与查询；邮件发件箱 + SMTP/文件投递；Cookie 与 CSRF；`rate_events` 滑动窗口；AES-GCM/MAC/argon2id |
 | `deploy/` | 单节点部署示例（systemd、nginx、`backup.sh`、配置与环境变量示例、`seed.example.sql`），全部为占位值 |
+| `deploy/remote/` | 一键部署：开发机上 `deploy/remote/yika.sh <目标> deploy`（交叉编译 + 前端构建 + 上传 + 服务器上 `server.sh install`，可重复执行）；另有 `status`/`logs`/`mail`/`backup`/`restore`/`ssh`。目标配置 `deploy/remote/targets/<目标>.env` 不进 Git（示例 `target.example.env`）；服务器密钥在 `/etc/yika`（首次生成，不覆盖）。见 `deploy/remote/README.md` |
 
 ## CLI Flags
 
