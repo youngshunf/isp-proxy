@@ -1957,7 +1957,7 @@ export interface components {
             note: string;
         };
         Catalog: {
-            /** @description 对客户展示的品牌名（控制面配置 mail.brand，默认“ISP 代理”）；前台页头与标题使用，不写死在前端 */
+            /** @description 对客户展示的品牌名（控制面配置 mail.brand，默认“驿卡”）；前台页头与标题使用，不写死在前端 */
             brand: string;
             plans: components["schemas"]["Plan"][];
             trafficPacks: components["schemas"]["TrafficPack"][];
