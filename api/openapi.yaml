@@ -2642,10 +2642,18 @@ components:
       type: string
       enum: [isp, direct]
       description: 订阅类型：isp 经 ISP 上游出站；direct 是管理员赠送的服务器直出代理（D-25），经中转服务器自身地址出站
+    DirectRegion:
+      type: object
+      description: 服务器直出的出口地域（D-25），管理员在节点上填写；直出不显示出口 IP，只显示它
+      required: [countryCode, name]
+      additionalProperties: false
+      properties:
+        countryCode: {$ref: '#/components/schemas/CountryCode'}
+        name: {type: string, minLength: 1, maxLength: 32, description: 显示名称，如 新加坡、香港}
     SubscriptionDirect:
       type: object
       description: 直出代理（D-25）：只限带宽不限流量，可用截止跟随付费订阅
-      required: [bandwidthMbps, maxConnections, paidUntil]
+      required: [bandwidthMbps, maxConnections, paidUntil, region]
       properties:
         bandwidthMbps: {type: integer, minimum: 1, description: 带宽上限}
         maxConnections: {type: integer, minimum: 1, description: 并发连接上限}
@@ -2653,6 +2661,11 @@ components:
           type: [string, 'null']
           format: date-time
           description: 可用截止 = 该用户时长有效（已开始、未到期、未删除）的 ISP 订阅中最晚的到期时间；没有时为 null（阻断原因 no_paid_subscription）
+        region:
+          description: 承载节点的直出出口地域；管理员未填写时为 null
+          oneOf:
+            - {$ref: '#/components/schemas/DirectRegion'}
+            - {type: 'null'}
     Subscription:
       type: object
       required: [id, name, kind, plan, direct, lifecycle, blockers, time, traffic, exit, access, quotas, openExitRequestId, openOrderIds]
@@ -3973,7 +3986,7 @@ components:
     Node:
       type: object
       required: [id, name, publicHost, portRange, status, online, lastSeenAt, lastReportAt, desiredRevision, appliedRevision,
-                 agentVersion, persistOk, clockSkewMs, capabilities, ports, subscriptions, activeConns, createdAt]
+                 agentVersion, persistOk, clockSkewMs, capabilities, ports, subscriptions, activeConns, directRegion, createdAt]
       properties:
         id: {type: string}
         name: {type: string}
@@ -4004,6 +4017,11 @@ components:
             cooldown: {type: integer}
         subscriptions: {type: integer, description: 承载的有效/保留期订阅数}
         activeConns: {type: [integer, 'null']}
+        directRegion:
+          description: 这台服务器的直出出口地域（D-25）；未填写为 null
+          oneOf:
+            - {$ref: '#/components/schemas/DirectRegion'}
+            - {type: 'null'}
         createdAt: {type: string, format: date-time}
     NodeInput:
       type: object
@@ -4017,12 +4035,18 @@ components:
           properties:
             start: {type: integer, minimum: 1024, maximum: 65535, default: 20000}
             end: {type: integer, minimum: 1024, maximum: 65535, default: 29999}
+        directRegion: {$ref: '#/components/schemas/DirectRegion'}
     NodePatch:
       type: object
       properties:
         name: {type: string, minLength: 1, maxLength: 64}
         publicHost: {type: string, minLength: 1, maxLength: 253}
         status: {type: string, enum: [active, draining, disabled]}
+        directRegion:
+          description: 直出出口地域；null 清除
+          oneOf:
+            - {$ref: '#/components/schemas/DirectRegion'}
+            - {type: 'null'}
     AlertKind:
       type: string
       enum: [node_offline, upstream_error, config_failed, cert_risk, persist_failed, clock_skew, fulfill_failed,

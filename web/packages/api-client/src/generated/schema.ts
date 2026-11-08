@@ -1926,6 +1926,12 @@ export interface components {
          * @enum {string}
          */
         SubscriptionKind: "isp" | "direct";
+        /** @description 服务器直出的出口地域（D-25），管理员在节点上填写；直出不显示出口 IP，只显示它 */
+        DirectRegion: {
+            countryCode: components["schemas"]["CountryCode"];
+            /** @description 显示名称，如 新加坡、香港 */
+            name: string;
+        };
         /** @description 直出代理（D-25）：只限带宽不限流量，可用截止跟随付费订阅 */
         SubscriptionDirect: {
             /** @description 带宽上限 */
@@ -1937,6 +1943,8 @@ export interface components {
              * @description 可用截止 = 该用户时长有效（已开始、未到期、未删除）的 ISP 订阅中最晚的到期时间；没有时为 null（阻断原因 no_paid_subscription）
              */
             paidUntil: string | null;
+            /** @description 承载节点的直出出口地域；管理员未填写时为 null */
+            region: components["schemas"]["DirectRegion"] | null;
         };
         Subscription: {
             id: string;
@@ -3093,6 +3101,8 @@ export interface components {
             /** @description 承载的有效/保留期订阅数 */
             subscriptions: number;
             activeConns: number | null;
+            /** @description 这台服务器的直出出口地域（D-25）；未填写为 null */
+            directRegion: components["schemas"]["DirectRegion"] | null;
             /** Format: date-time */
             createdAt: string;
         };
@@ -3105,12 +3115,15 @@ export interface components {
                 /** @default 29999 */
                 end: number;
             };
+            directRegion?: components["schemas"]["DirectRegion"];
         };
         NodePatch: {
             name?: string;
             publicHost?: string;
             /** @enum {string} */
             status?: "active" | "draining" | "disabled";
+            /** @description 直出出口地域；null 清除 */
+            directRegion?: components["schemas"]["DirectRegion"] | null;
         };
         /** @enum {string} */
         AlertKind: "node_offline" | "upstream_error" | "config_failed" | "cert_risk" | "persist_failed" | "clock_skew" | "fulfill_failed" | "exit_change_failed" | "port_pool_low" | "stock_low" | "late_payment";

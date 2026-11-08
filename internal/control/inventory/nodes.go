@@ -36,7 +36,9 @@ type NodeView struct {
 	Ports           PortCounts     `json:"ports"`
 	Subscriptions   int            `json:"subscriptions"`
 	ActiveConns     *int           `json:"activeConns"`
-	CreatedAt       time.Time      `json:"createdAt"`
+	// DirectRegion 是这台服务器的直出出口地域（D-25），管理员填写；未填为 null。
+	DirectRegion *kernel.DirectRegion `json:"directRegion"`
+	CreatedAt    time.Time            `json:"createdAt"`
 }
 
 // PortRange 是端口范围。
@@ -55,7 +57,7 @@ type PortCounts struct {
 
 const nodeSelect = `SELECT n.id, n.name, n.public_host, n.port_range_start, n.port_range_end, n.status, n.last_seen_at,
 	n.last_report_at, n.desired_revision, n.applied_revision, n.agent_version, n.persist_ok, n.clock_skew_ms, n.capabilities,
-	n.created_at,
+	n.created_at, n.direct_country_code, n.direct_region,
 	(SELECT count(*) FROM ports p WHERE p.node_id = n.id),
 	(SELECT count(*) FROM ports p WHERE p.node_id = n.id AND p.state = 'free'),
 	(SELECT count(*) FROM ports p WHERE p.node_id = n.id AND p.state = 'allocated'),
@@ -67,14 +69,16 @@ const nodeSelect = `SELECT n.id, n.name, n.public_host, n.port_range_start, n.po
 func (s *Service) scanNode(row interface{ Scan(...any) error }, now time.Time) (*NodeView, error) {
 	v := &NodeView{}
 	var conns *int64
+	var dcc, dregion *string
 	if err := row.Scan(&v.ID, &v.Name, &v.PublicHost, &v.PortRange.Start, &v.PortRange.End, &v.Status, &v.LastSeenAt,
 		&v.LastReportAt, &v.DesiredRevision, &v.AppliedRevision, &v.AgentVersion, &v.PersistOK, &v.ClockSkewMs, &v.Capabilities,
-		&v.CreatedAt, &v.Ports.Total, &v.Ports.Free, &v.Ports.Allocated, &v.Ports.Cooldown, &v.Subscriptions, &conns); err != nil {
+		&v.CreatedAt, &dcc, &dregion, &v.Ports.Total, &v.Ports.Free, &v.Ports.Allocated, &v.Ports.Cooldown, &v.Subscriptions, &conns); err != nil {
 		return nil, err
 	}
 	if v.Capabilities == nil {
 		v.Capabilities = map[string]any{}
 	}
+	v.DirectRegion = kernel.RegionOf(dcc, dregion)
 	v.Online = v.LastSeenAt != nil && now.Sub(*v.LastSeenAt) <= s.env.Cfg.FreshWindow
 	if conns != nil {
 		c := int(*conns)
@@ -114,9 +118,10 @@ func (s *Service) ListNodes(ctx context.Context) ([]NodeView, error) {
 
 // NodeInput 是 OpenAPI NodeInput。
 type NodeInput struct {
-	Name       string     `json:"name"`
-	PublicHost string     `json:"publicHost"`
-	PortRange  *PortRange `json:"portRange"`
+	Name         string               `json:"name"`
+	PublicHost   string               `json:"publicHost"`
+	PortRange    *PortRange           `json:"portRange"`
+	DirectRegion *kernel.DirectRegion `json:"directRegion"`
 }
 
 // CreateNode 登记节点并预填端口池（docs/06 §1 默认 20000-29999）。
@@ -132,11 +137,20 @@ func (s *Service) CreateNode(ctx context.Context, adminID string, in NodeInput) 
 	if pr.Start < 1024 || pr.End > 65535 || pr.End < pr.Start+2 {
 		return nil, httpx.Invalid("端口范围必须在 1024～65535 且至少 3 个端口")
 	}
+	var dcc, dregion *string
+	if in.DirectRegion != nil {
+		d, err := in.DirectRegion.Normalize()
+		if err != nil {
+			return nil, err
+		}
+		dcc, dregion = &d.CountryCode, &d.Name
+	}
 	var v *NodeView
 	err := s.env.InTx(ctx, func(tx *kernel.Tx) error {
 		id := store.NewID("nod")
-		_, err := tx.Exec(ctx, `INSERT INTO nodes (id, name, public_host, port_range_start, port_range_end, created_at)
-		                         VALUES ($1, $2, $3, $4, $5, $6)`, id, in.Name, in.PublicHost, pr.Start, pr.End, tx.Now())
+		_, err := tx.Exec(ctx, `INSERT INTO nodes (id, name, public_host, port_range_start, port_range_end, direct_country_code,
+		                                            direct_region, created_at)
+		                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, id, in.Name, in.PublicHost, pr.Start, pr.End, dcc, dregion, tx.Now())
 		if store.IsUniqueViolation(err, "") {
 			return httpx.Conflict("节点名称已存在")
 		}
@@ -148,7 +162,7 @@ func (s *Service) CreateNode(ctx context.Context, adminID string, in NodeInput) 
 			return err
 		}
 		if err := tx.Audit(ctx, adminID, "node.create", "node:"+id, map[string]any{"name": in.Name, "publicHost": in.PublicHost,
-			"portRange": pr}); err != nil {
+			"portRange": pr, "directRegion": in.DirectRegion}); err != nil {
 			return err
 		}
 		v, err = s.GetNode(ctx, tx, id)
@@ -162,6 +176,8 @@ type NodePatch struct {
 	Name       *string `json:"name"`
 	PublicHost *string `json:"publicHost"`
 	Status     *string `json:"status"`
+	// DirectRegion 缺省不改，null 清除，对象设置。只用于展示，不影响期望状态。
+	DirectRegion kernel.OptRegion `json:"directRegion"`
 }
 
 // UpdateNode 修改节点。状态变化影响订阅启用（停用节点上的订阅不启用），提升修订号。
@@ -193,6 +209,19 @@ func (s *Service) UpdateNode(ctx context.Context, adminID, id string, p NodePatc
 				return httpx.Invalid("公共域名不合法")
 			}
 			if _, err := tx.Exec(ctx, `UPDATE nodes SET public_host = $2 WHERE id = $1`, id, h); err != nil {
+				return err
+			}
+		}
+		if p.DirectRegion.Set {
+			var dcc, dregion *string
+			if p.DirectRegion.Value != nil {
+				d, err := p.DirectRegion.Value.Normalize()
+				if err != nil {
+					return err
+				}
+				dcc, dregion = &d.CountryCode, &d.Name
+			}
+			if _, err := tx.Exec(ctx, `UPDATE nodes SET direct_country_code = $2, direct_region = $3 WHERE id = $1`, id, dcc, dregion); err != nil {
 				return err
 			}
 		}

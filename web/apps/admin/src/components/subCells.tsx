@@ -60,7 +60,7 @@ export function PlanCell({ s }: { s: AdminSubscription }) {
 }
 
 export function ExitCell({ s }: { s: AdminSubscription }) {
-  if (s.kind === 'direct') return <span className="muted">服务器自身地址</span>
+  if (s.kind === 'direct') return <span className="muted">{s.direct?.region ? `直出 · ${s.direct.region.name}` : '服务器直出'}</span>
   if (!s.exit) return <span className="muted">未绑定</span>
   const ip = s.exit.verifiedIp ?? s.exit.ip
   return (

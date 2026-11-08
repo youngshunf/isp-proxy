@@ -81,6 +81,10 @@ function NodeCard({ n, onEdit }: { n: Node; onEdit: () => void }) {
       </div>
       <dl className="facts" style={{ fontSize: 13 }}>
         <div className="fact">
+          <dt>直出地域</dt>
+          <dd>{n.directRegion ? `${n.directRegion.name}（${n.directRegion.countryCode.toUpperCase()}）` : <span className="muted">未填写</span>}</dd>
+        </div>
+        <div className="fact">
           <dt>心跳</dt>
           <dd>
             <Ago at={n.lastSeenAt} empty="从未" />

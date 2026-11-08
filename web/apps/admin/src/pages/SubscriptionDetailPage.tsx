@@ -235,7 +235,10 @@ export default function SubscriptionDetailPage() {
                     ]}
                   />
                 ) : direct ? (
-                  <p className="muted">服务器直出：经节点自身地址出站，不经 ISP 上游，没有出口资源。</p>
+                  <p className="muted">
+                    服务器直出：经节点自身地址出站，不经 ISP 上游，没有出口资源。出口地域：
+                    {s.direct?.region ? `${s.direct.region.name}（${s.direct.region.countryCode.toUpperCase()}）` : '节点未填写（在“节点与监控”里修改节点）'}
+                  </p>
                 ) : (
                   <p className="muted">没有绑定出口（{LIFECYCLE[s.lifecycle]}）。</p>
                 )}

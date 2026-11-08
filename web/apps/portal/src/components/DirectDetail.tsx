@@ -4,7 +4,7 @@ import type { DirectSubscription } from '@isp/api-client'
 import { Plate } from '@isp/ui'
 import { Blockers, History, Rename } from '../pages/IpDetailPage'
 import { AccessPanel } from './AccessPanel'
-import { DirectBalances, DirectFace, DirectMark } from './DirectCard'
+import { DirectBalances, DirectFace, DirectRegionMark } from './DirectCard'
 import { StateCell, serial } from './SimCard'
 
 /** 直出代理详情：卡面与用量、记录、接入（可复制连接、换接入）。没有续购、换出口入口（D-25）。 */
@@ -36,7 +36,7 @@ export function DirectDetail({ sub }: { sub: DirectSubscription }) {
                 <StateCell sub={sub} />
                 <div className="sim-face">
                   <div className="sim-top">
-                    <DirectMark />
+                    <DirectRegionMark sub={sub} />
                     <div className="sim-title">
                       <div className="sim-name" style={{ cursor: 'default' }}>
                         直出线路与用量

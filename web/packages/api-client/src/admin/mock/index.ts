@@ -327,7 +327,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
       user: { id: u.id, email: u.email },
       nodeId: s.nodeId,
       plan: s.direct ? null : s.plan,
-      direct: s.direct ? { ...s.direct, paidUntil: until } : null,
+      direct: s.direct ? { ...s.direct, paidUntil: until, region: db.nodes.find((n) => n.id === s.nodeId)?.directRegion ?? null } : null,
       lifecycle: s.lifecycle,
       blockers: blockersOf(s),
       adminPaused: s.adminPaused,
@@ -2054,7 +2054,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         if (db.nodes.some((n) => n.name === body.name)) fail('conflict', '节点名称已存在')
         const range = body.portRange ?? { start: 20000, end: 29999 }
         if (range.end <= range.start) fail('invalid', '端口范围不正确')
-        const n: Node = { id: nextId('nod'), name: body.name, publicHost: body.publicHost, portRange: range, status: 'active', online: false, lastSeenAt: null, lastReportAt: null, desiredRevision: 0, appliedRevision: 0, agentVersion: null, persistOk: null, clockSkewMs: null, capabilities: {}, ports: { total: range.end - range.start + 1, free: range.end - range.start + 1, allocated: 0, cooldown: 0 }, subscriptions: 0, activeConns: null, createdAt: iso(now) }
+        const n: Node = { id: nextId('nod'), name: body.name, publicHost: body.publicHost, portRange: range, status: 'active', online: false, lastSeenAt: null, lastReportAt: null, desiredRevision: 0, appliedRevision: 0, agentVersion: null, persistOk: null, clockSkewMs: null, capabilities: {}, ports: { total: range.end - range.start + 1, free: range.end - range.start + 1, allocated: 0, cooldown: 0 }, subscriptions: 0, activeConns: null, directRegion: body.directRegion ?? null, createdAt: iso(now) }
         db.nodes.push(n)
         audit('node.create', 'node', n.id, { name: n.name })
         return nodeView(n)

@@ -2,13 +2,15 @@ import { ArrowRightOutlined } from '@ant-design/icons'
 import { Button } from 'antd'
 import { Link, useNavigate } from 'react-router'
 import type { DirectSubscription } from '@isp/api-client'
+import { CountryFlag } from '@isp/ui'
 import { fmtBytes, fmtDate, fmtDay } from '../lib/format'
 import { ProtocolCopy } from './ProtocolCopy'
 import { StateCell, serial } from './SimCard'
 
 // 服务器直出代理（D-25）的卡片：管理员赠送，经中转服务器自身地址出站，只限带宽不限流量，跟随付费 IP 有效。
-// 与 SimCard 同一卡形（切角、状态格、卡面 / 卡托 / 卡脚），但没有出口国家，所以卡面左上角不放国旗
-// （The Flag Identity Rule：国旗只代表出口国家），改放一枚单色的“直出”标记；没有续时长、买流量、换出口入口。
+// 与 SimCard 同一卡形（切角、状态格、卡面 / 卡托 / 卡脚）。直出不显示出口 IP，只显示管理员在节点上填写的
+// 出口地域（如 新加坡、香港）：填了就在卡面左上角放该地域的国旗（The Flag Identity Rule：国旗代表出口所在地），
+// 没填就放一枚单色的“直出”标记。没有续时长、买流量、换出口入口。
 
 /** 卡面左上角的直出标记：与国旗同尺寸的卡托灰底单色服务器图形，不引入装饰色。 */
 export function DirectMark() {
@@ -25,15 +27,22 @@ export function DirectMark() {
   )
 }
 
-/** 卡面中部：直出线路说明（直出没有出口 IP 可印，这里写出站方式）。 */
+/** 卡面左上角：出口地域的国旗；节点还没填出口地域时用直出标记。 */
+export function DirectRegionMark({ sub }: { sub: DirectSubscription }) {
+  const r = sub.direct.region
+  return r ? <CountryFlag code={r.countryCode} name={r.name} /> : <DirectMark />
+}
+
+/** 卡面中部：出口地域（不印出口 IP）与出站方式。 */
 export function DirectFace({ sub, large = false }: { sub: DirectSubscription; large?: boolean }) {
+  const r = sub.direct.region
   return (
     <div className="sim-exit">
       <div className={`direct-face${sub.blockers.length > 0 ? ' muted' : ''}`} style={large ? { fontSize: 24 } : undefined}>
-        服务器直出
+        {r ? r.name : '服务器直出'}
       </div>
       <div className="exit-meta">
-        <span>经中转服务器自身地址出站</span>
+        <span>{r ? '服务器直出' : '经中转服务器自身地址出站'}</span>
         <span>不经 ISP 上游</span>
       </div>
     </div>
@@ -101,7 +110,7 @@ export function DirectCard({ sub }: { sub: DirectSubscription }) {
           <StateCell sub={sub} />
           <div className="sim-face">
             <div className="sim-top">
-              <DirectMark />
+              <DirectRegionMark sub={sub} />
               <div className="sim-title">
                 <Link id={nameId} className="sim-name" to={`/ips/${sub.id}`}>
                   {sub.name}

@@ -253,7 +253,7 @@ function seed(now: number) {
         id: 'sub_dx01',
         name: '服务器直出',
         kind: 'direct',
-        direct: { bandwidthMbps: 10, maxConnections: 64, paidUntil: null },
+        direct: { bandwidthMbps: 10, maxConnections: 64, paidUntil: null, region: { countryCode: 'hk', name: '香港' } },
         plan: null,
         lifecycle: 'active',
         time: { periodDays: 0, startedAt: iso(now - 6 * DAY), expiresAt: null, retentionEndsAt: null },

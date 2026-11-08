@@ -41,7 +41,7 @@ const blockersSQL = `ARRAY_REMOVE(ARRAY[
 // baseSQL 选出视图所需的订阅列；外层可包一层 SELECT … FROM (baseSQL) v WHERE … 做筛选。
 const baseSQL = `SELECT s.id AS id, s.user_id AS user_id, u.email AS email, u.status AS user_status, s.name AS name,
 	s.lifecycle AS lifecycle, s.lifecycle_reason AS lifecycle_reason, s.node_id AS node_id, n.status AS node_status,
-	n.public_host AS node_host, s.kind AS kind, COALESCE(s.plan_id, '') AS plan_id,
+	n.public_host AS node_host, n.direct_country_code AS node_dcc, n.direct_region AS node_dregion, s.kind AS kind, COALESCE(s.plan_id, '') AS plan_id,
 	COALESCE(s.plan_version_id, '') AS plan_version_id, COALESCE(pv.version, 0) AS plan_version, COALESCE(pv.name, '') AS plan_name,
 	COALESCE(pv.country_code, '') AS cc, COALESCE(pv.country_name, '') AS country, COALESCE(pv.city, '') AS city,
 	COALESCE(pv.concurrency, s.direct_max_conns) AS concurrency, COALESCE(pv.bandwidth_mbps, s.direct_bandwidth_mbps) AS bandwidth,
@@ -60,7 +60,7 @@ const baseSQL = `SELECT s.id AS id, s.user_id AS user_id, u.email AS email, u.st
 	FROM subscriptions s JOIN users u ON u.id = s.user_id LEFT JOIN plan_versions pv ON pv.id = s.plan_version_id
 	LEFT JOIN nodes n ON n.id = s.node_id`
 
-const outerCols = `id, user_id, email, user_status, name, lifecycle, lifecycle_reason, node_id, node_status, node_host, kind, plan_id,
+const outerCols = `id, user_id, email, user_status, name, lifecycle, lifecycle_reason, node_id, node_status, node_host, node_dcc, node_dregion, kind, plan_id,
 	plan_version_id, plan_version, plan_name, cc, country, city, concurrency, bandwidth, paid_until, admin_paused, paused_reason, entitled_bytes,
 	used_bytes, entitled_secs, before_secs, first_ready_at, period_started_at, expires_at, retention_ends_at, released_at, deleted_at,
 	cur_access, cur_exit, desired_version, applied_version, active_conns, usage_reported_at, rules_version, created_from_order,
@@ -69,6 +69,7 @@ const outerCols = `id, user_id, email, user_status, name, lifecycle, lifecycle_r
 type row struct {
 	ID, UserID, Email, UserStatus, Name, Lifecycle     string
 	LifecycleReason, NodeID, NodeStatus, NodeHost      *string
+	NodeDCC, NodeDRegion                               *string
 	Kind, PlanID, PlanVersionID                        string
 	PlanVersion                                        int
 	PlanName, CC, Country, City                        string
@@ -94,7 +95,7 @@ type row struct {
 func scanRow(r interface{ Scan(...any) error }) (*row, error) {
 	x := &row{}
 	err := r.Scan(&x.ID, &x.UserID, &x.Email, &x.UserStatus, &x.Name, &x.Lifecycle, &x.LifecycleReason, &x.NodeID, &x.NodeStatus,
-		&x.NodeHost, &x.Kind, &x.PlanID, &x.PlanVersionID, &x.PlanVersion, &x.PlanName, &x.CC, &x.Country, &x.City, &x.Concurrency,
+		&x.NodeHost, &x.NodeDCC, &x.NodeDRegion, &x.Kind, &x.PlanID, &x.PlanVersionID, &x.PlanVersion, &x.PlanName, &x.CC, &x.Country, &x.City, &x.Concurrency,
 		&x.Bandwidth, &x.PaidUntil, &x.AdminPaused, &x.PausedReason, &x.EntitledBytes, &x.UsedBytes, &x.EntitledSecs, &x.BeforeSecs, &x.FirstReady,
 		&x.PeriodStarted, &x.Expires, &x.RetentionEnds, &x.Released, &x.Deleted, &x.CurAccess, &x.CurExit, &x.DesiredV, &x.AppliedV,
 		&x.ActiveConns, &x.UsageReportedAt, &x.RulesVersion, &x.CreatedFromOrder, &x.CreatedAt, &x.ActiveTask, &x.OpenExitReq,
@@ -190,6 +191,8 @@ type Direct struct {
 	MaxConnections int `json:"maxConnections"`
 	// PaidUntil 是可用截止：该用户时长有效的 ISP 订阅中最晚的到期时间；没有时为 null（阻断原因 no_paid_subscription）。
 	PaidUntil *time.Time `json:"paidUntil"`
+	// Region 是承载节点的直出出口地域（管理员在节点上填写）；未填为 null。直出不显示出口 IP。
+	Region *kernel.DirectRegion `json:"region"`
 }
 
 // View 是 OpenAPI Subscription。
@@ -225,7 +228,8 @@ func (x *row) direct() *Direct {
 	if !x.isDirect() {
 		return nil
 	}
-	return &Direct{BandwidthMbps: x.Bandwidth, MaxConnections: x.Concurrency, PaidUntil: kernel.TimePtr(x.PaidUntil)}
+	return &Direct{BandwidthMbps: x.Bandwidth, MaxConnections: x.Concurrency, PaidUntil: kernel.TimePtr(x.PaidUntil),
+		Region: kernel.RegionOf(x.NodeDCC, x.NodeDRegion)}
 }
 
 // timeView 是时长视图；直出订阅的到期时间即可用截止（跟随付费订阅），没有时长段。

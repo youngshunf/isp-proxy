@@ -277,3 +277,74 @@ func TestDirectGrantNeedsNode(t *testing.T) {
 	x.fail(x.do(x.asAdmin(), "PUT", "/admin-api/users/"+u+"/direct-proxy", map[string]any{}), 412, "")
 	x.fail(x.do(x.asAdmin(), "PUT", "/admin-api/users/"+x.newUser("tmp@example.com")[:4]+"nope/direct-proxy", map[string]any{}), 404, "")
 }
+
+// 直出不显示出口 IP，只显示节点上由管理员填写的出口地域（D-25 补充）。
+func TestDirectRegionFromNode(t *testing.T) {
+	x := newH(t)
+	u := x.newUser("region@example.com")
+	g := x.grantDirect(u, map[string]any{})
+	x.apply(x.node)
+
+	type region struct {
+		CountryCode string `json:"countryCode"`
+		Name        string `json:"name"`
+	}
+	type regionView struct {
+		Direct struct {
+			Region *region `json:"region"`
+		} `json:"direct"`
+		Exit *struct{} `json:"exit"`
+	}
+	view := func() regionView {
+		t.Helper()
+		var v regionView
+		x.ok(x.do(asUser(u), "GET", "/api/subscriptions/"+g.ID, nil), 200, &v)
+		return v
+	}
+	if v := view(); v.Direct.Region != nil || v.Exit != nil {
+		t.Fatalf("节点未填地域时应为 null 且不显示出口: %+v", v)
+	}
+
+	patch := func(body map[string]any) resp { return x.do(x.asAdmin(), "PATCH", "/admin-api/nodes/"+x.node, body) }
+	// 校验：代码两位字母、名称 1～32 字、对象内不接受未知字段。
+	x.fail(patch(map[string]any{"directRegion": map[string]any{"countryCode": "sgp", "name": "新加坡"}}), 422, "")
+	x.fail(patch(map[string]any{"directRegion": map[string]any{"countryCode": "sg", "name": " "}}), 422, "")
+	x.fail(patch(map[string]any{"directRegion": map[string]any{"countryCode": "sg", "name": "新加坡", "ip": "1.2.3.4"}}), 422, "")
+
+	before := entry(x.desired(x.node), g.ID).Version
+	var n struct {
+		DirectRegion *region `json:"directRegion"`
+	}
+	x.ok(patch(map[string]any{"directRegion": map[string]any{"countryCode": " SG ", "name": " 新加坡 "}}), 200, &n)
+	if n.DirectRegion == nil || *n.DirectRegion != (region{"sg", "新加坡"}) || !x.audit.has("node.update") {
+		t.Fatalf("设置地域: %+v", n.DirectRegion)
+	}
+	if v := view(); v.Direct.Region == nil || *v.Direct.Region != (region{"sg", "新加坡"}) {
+		t.Fatalf("直出视图应显示节点地域: %+v", v.Direct.Region)
+	}
+	var list []struct {
+		ID     string `json:"id"`
+		Direct *struct {
+			Region *region `json:"region"`
+		} `json:"direct"`
+	}
+	x.ok(x.do(asUser(u), "GET", "/api/subscriptions", nil), 200, &list)
+	for _, s := range list {
+		if s.ID == g.ID && (s.Direct == nil || s.Direct.Region == nil || *s.Direct.Region != (region{"sg", "新加坡"})) {
+			t.Fatalf("列表里的直出订阅也应显示地域: %+v", s.Direct)
+		}
+	}
+	// 只用于展示：不改期望状态版本。
+	if e := entry(x.desired(x.node), g.ID); e.Version != before {
+		t.Fatalf("改地域不应生成新期望版本: %d → %d", before, e.Version)
+	}
+	// 不带 directRegion 的补丁不改它；null 清除。
+	x.ok(patch(map[string]any{"name": "node-a2"}), 200, &n)
+	if n.DirectRegion == nil {
+		t.Fatal("未提交 directRegion 时不应清除")
+	}
+	x.ok(patch(map[string]any{"directRegion": nil}), 200, &n)
+	if n.DirectRegion != nil || view().Direct.Region != nil {
+		t.Fatalf("null 应清除地域: %+v", n.DirectRegion)
+	}
+}

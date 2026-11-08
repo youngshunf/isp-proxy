@@ -19,12 +19,25 @@ function renderCard(sub: DirectSubscription) {
 afterEach(cleanup)
 
 describe('DirectCard', () => {
-  it('跟随付费 IP：显示直出标记、带宽上限、累计用量与可用截止，三种协议都能复制', () => {
+  it('节点填了出口地域：显示地域与国旗，不显示出口 IP', () => {
     renderCard(direct)
     const card = screen.getByRole('article')
+    expect(within(card).getByRole('img', { name: '香港' })).toBeTruthy()
+    expect(within(card).getByText('香港')).toBeTruthy()
+    expect(card.querySelector('.exit-meta')?.textContent).toContain('服务器直出')
+    expect(within(card).queryByText(/\d+\.\d+\.\d+\.\d+/)).toBeNull()
+  })
+
+  it('节点没填出口地域：用直出标记，不放国旗', () => {
+    renderCard({ ...direct, direct: { ...direct.direct, region: null } })
+    const card = screen.getByRole('article')
     expect(within(card).getByRole('img', { name: '服务器直出' })).toBeTruthy()
-    // 不显示国旗：卡面上没有国旗图片（The Flag Identity Rule：国旗只代表出口国家）。
     expect(card.querySelector('.flag img')).toBeNull()
+  })
+
+  it('跟随付费 IP：显示带宽上限、累计用量与可用截止，三种协议都能复制', () => {
+    renderCard(direct)
+    const card = screen.getByRole('article')
     expect(within(card).getByText(/10 Mbps/)).toBeTruthy()
     expect(within(card).getByText('累计用量')).toBeTruthy()
     expect(within(card).getByText(/不限流量/)).toBeTruthy()
