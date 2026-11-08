@@ -47,13 +47,28 @@ test('主流程：从注册到换出口', async ({ page, browser }) => {
     return page.url().split('/').pop()!
   })
 
-  // 复制按钮写系统剪贴板，需要页面有焦点；再从剪贴板读回，确认复制的就是可用的连接串
+  // 复制按钮写系统剪贴板，需要页面有焦点；再从剪贴板读回，确认复制的就是可用的连接串。
+  // 刚操作过后台窗口时焦点可能还没回来，写剪贴板会被浏览器拒绝、读回的是上一次的内容。
+  // 所以先写入一个占位串并确认写进去了（说明已有焦点），再点复制，读回值必须不再是占位串。
+  const SENTINEL = '__e2e_clipboard_sentinel__'
+  const readClipboard = () => page.evaluate(() => navigator.clipboard.readText()).catch(() => '')
   const copyConn = async (proto: 'HTTP' | 'SOCKS5') => {
-    await page.bringToFront()
+    const prefix = proto === 'HTTP' ? 'http://' : 'socks5://'
     const row = page.locator('.conn-row').filter({ hasText: proto }).first()
-    await row.getByRole('button', { name: /复制/ }).click()
-    await expect(row.getByRole('button', { name: '已复制' })).toBeVisible()
-    return page.evaluate(() => navigator.clipboard.readText())
+    for (let i = 0; i < 5; i++) {
+      await page.bringToFront()
+      await page.evaluate((v) => navigator.clipboard.writeText(v), SENTINEL).catch(() => {})
+      if ((await readClipboard()) !== SENTINEL) {
+        await page.waitForTimeout(500)
+        continue
+      }
+      await row.getByRole('button', { name: /复制/ }).click()
+      await expect(row.getByRole('button', { name: '已复制' })).toBeVisible()
+      const got = await readClipboard()
+      if (got !== SENTINEL && got.startsWith(prefix)) return got
+      await page.waitForTimeout(500)
+    }
+    throw new Error(`${proto} 连接串没有写进剪贴板`)
   }
 
   const firstExit = await test.step('复制 HTTP 连接串，经它请求看到出口标签', async () => {
