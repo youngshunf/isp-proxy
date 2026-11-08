@@ -559,6 +559,29 @@
   align-items: center;
   gap: 12px;
 }
+/* 套餐名称醒目，地区为辅（D-27） */
+.plan-id {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.plan-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.plan-region {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.sheet tr.row.disabled .plan-name {
+  color: var(--ink-3);
+}
+.choice:disabled {
+  cursor: not-allowed;
+  color: var(--ink-3);
+  background: var(--tray);
+}
 .stock {
   font-size: 13px;
   white-space: nowrap;

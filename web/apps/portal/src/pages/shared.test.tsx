@@ -6,7 +6,7 @@ import { renderApp } from '../test/renderApp'
 describe('共享出口', () => {
   it('购买页：同一地区的独享与共享套餐分开列出，可下共享单', async () => {
     const { user, api } = renderApp('/buy')
-    await screen.findByText('选择地区')
+    await screen.findByText('选择套餐')
     const shared = screen.getByRole('radio', { name: '美国 洛杉矶 共享' })
     const exclusive = screen.getByRole('radio', { name: '美国 洛杉矶' })
     expect(within(shared.closest('tr')!).getByText('共享')).toBeTruthy()

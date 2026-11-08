@@ -1,7 +1,7 @@
 // 换出口状态机：每一步能否前进、候选被拒的原因。
 import { describe, expect, it } from 'vitest'
 import type { Probe, Task, Upstream } from '@isp/api-client/admin'
-import { canSubmit, candidateFits, initialWizard, makeWizardReducer, rejectionReasons, type WizardState } from './exitWizard'
+import { canSubmit, candidateFits, cityMatches, initialWizard, makeWizardReducer, rejectionReasons, type WizardState } from './exitWizard'
 
 const reduce = makeWizardReducer('us')
 
@@ -124,6 +124,16 @@ describe('换出口状态机', () => {
     expect(s.step).toBe('submit')
     expect(s.submitError).toMatch(/进行中的任务/)
     expect(reduce(s, { type: 'reset' })).toEqual(initialWizard)
+  })
+})
+
+describe('城市可选（D-27）', () => {
+  it('订阅不限城市时任何候选都符合；有城市时只有同城符合，没有城市的候选不符合', () => {
+    expect(cityMatches(null, '洛杉矶')).toBe(true)
+    expect(cityMatches(null, null)).toBe(true)
+    expect(cityMatches('洛杉矶', '洛杉矶')).toBe(true)
+    expect(cityMatches('洛杉矶', '纽约')).toBe(false)
+    expect(cityMatches('洛杉矶', null)).toBe(false)
   })
 })
 

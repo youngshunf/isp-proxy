@@ -32,7 +32,7 @@ export function ExitFace({ sub, large = false }: { sub: IspSubscription; large?:
         <div className="exit-ip placeholder">出口开通中</div>
         <div className="exit-meta">
           <span>
-            {sub.plan.country} · {sub.plan.city}
+            {sub.plan.country} · {sub.plan.city ?? '不限城市'}
           </span>
           <span>具体地址在开通时分配</span>
         </div>
@@ -53,7 +53,8 @@ export function ExitFace({ sub, large = false }: { sub: IspSubscription; large?:
       </div>
       <div className="exit-meta">
         <span>
-          {sub.exit.country} · {sub.exit.city}
+          {sub.exit.country}
+          {sub.exit.city ? ` · ${sub.exit.city}` : ''}
         </span>
         <span>
           {sub.exit.check === 'stale' ? '上次检测' : '实测'} {fmtAgo(sub.exit.checkedAt)}

@@ -76,6 +76,8 @@ function PlanTable() {
               </span>
             ),
           },
+          // 城市为空表示不限城市（D-27）。
+          { title: '地区', render: (_, p) => `${p.current.country} · ${p.current.city ?? '不限城市'}` },
           { title: '出口', render: (_, p) => <ExitModeChip mode={p.exitMode} /> },
           { title: '月价', align: 'right', render: (_, p) => <span className="amount">{fmtMoney(p.current.price)}</span> },
           { title: '含流量', align: 'right', render: (_, p) => fmtBytes(p.current.includedBytes) },
@@ -145,6 +147,8 @@ function PlanVersions({ planId }: { planId: string }) {
   )
 }
 
+const cityOf = (v: PlanVersionInput) => v.city?.trim() ?? ''
+
 function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () => void }) {
   const api = useApi()
   const qc = useQueryClient()
@@ -154,7 +158,7 @@ function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () =>
   const [exitMode, setExitMode] = useState<ExitMode>('exclusive')
   const [v, setV] = useState<PlanVersionInput>(
     c
-      ? { name: c.name, countryCode: c.countryCode, country: c.country, city: c.city, price: c.price, periodDays: c.periodDays, includedBytes: c.includedBytes, concurrency: c.concurrency, bandwidthMbps: c.bandwidthMbps }
+      ? { name: c.name, countryCode: c.countryCode, country: c.country, city: c.city ?? '', price: c.price, periodDays: c.periodDays, includedBytes: c.includedBytes, concurrency: c.concurrency, bandwidthMbps: c.bandwidthMbps }
       : { name: '', countryCode: 'us', country: '美国', city: '', price: { amount: 0, currency: 'CNY' }, periodDays: 30, includedBytes: 100 * GB, concurrency: 50, bandwidthMbps: 50 },
   )
   const set = <K extends keyof PlanVersionInput>(k: K, x: PlanVersionInput[K]) => setV((o) => ({ ...o, [k]: x }))
@@ -166,9 +170,12 @@ function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () =>
     if (c.concurrency !== v.concurrency) diffs.push(`并发：${c.concurrency} → ${v.concurrency}`)
     if (c.bandwidthMbps !== v.bandwidthMbps) diffs.push(`带宽：${c.bandwidthMbps} → ${v.bandwidthMbps} Mbps`)
     if (c.periodDays !== v.periodDays) diffs.push(`周期：${c.periodDays} → ${v.periodDays} 天`)
-    if (c.city !== v.city || c.countryCode !== v.countryCode) diffs.push(`地区：${c.country} ${c.city} → ${v.country} ${v.city}`)
+    if ((c.city ?? '') !== cityOf(v) || c.countryCode !== v.countryCode)
+      diffs.push(`地区：${c.country} ${c.city ?? '不限城市'} → ${v.country} ${cityOf(v) || '不限城市'}`)
   }
-  const ready = v.name.trim() && v.city.trim() && v.concurrency >= 1 && v.bandwidthMbps >= 1 && (plan ? diffs.length > 0 : /^[a-z0-9][a-z0-9-]{1,31}$/.test(code))
+  // 城市可选（D-27）：留空提交 null，表示不限城市。
+  const body = (): PlanVersionInput => ({ ...v, name: v.name.trim(), city: cityOf(v) || null })
+  const ready = v.name.trim() && v.concurrency >= 1 && v.bandwidthMbps >= 1 && (plan ? diffs.length > 0 : /^[a-z0-9][a-z0-9-]{1,31}$/.test(code))
   return (
     <ConfirmAction
       open
@@ -190,8 +197,8 @@ function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () =>
       }
       onConfirm={() =>
         plan
-          ? api.adminCreatePlanVersion({ planId: plan.id, body: { ...v, name: v.name.trim(), city: v.city.trim() } })
-          : api.adminCreatePlan({ body: { code, exitMode, version: { ...v, name: v.name.trim(), city: v.city.trim() } } })
+          ? api.adminCreatePlanVersion({ planId: plan.id, body: body() })
+          : api.adminCreatePlan({ body: { code, exitMode, version: body() } })
       }
       onDone={() => {
         message.success(plan ? '已发布新版本' : '已创建草稿')
@@ -244,8 +251,10 @@ function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () =>
           />
         </label>
         <label className="field" style={{ marginTop: 12 }}>
-          <span className="field-label">城市</span>
-          <Input aria-label="城市" value={v.city} onChange={(e) => set('city', e.target.value)} />
+          <span className="field-label">
+            城市<em>可选</em>
+          </span>
+          <Input aria-label="城市" value={v.city ?? ''} placeholder="留空 = 不限城市" onChange={(e) => set('city', e.target.value)} />
         </label>
         <label className="field" style={{ marginTop: 12 }}>
           <span className="field-label">月价（元）</span>

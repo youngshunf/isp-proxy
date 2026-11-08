@@ -387,8 +387,9 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
     lastLoginAt: u.lastLoginAt,
   })
 
-  const planStock = (cc: string, city: string, mode: Db['plans'][number]['exitMode']) => {
-    const rs = db.upstreams.filter((r) => r.u.countryCode === cc && r.u.city === city)
+  // 城市为空（不限城市，D-27）时按整个国家计，含没有城市的资源。
+  const planStock = (cc: string, city: string | null, mode: Db['plans'][number]['exitMode']) => {
+    const rs = db.upstreams.filter((r) => r.u.countryCode === cc && (city === null || r.u.city === city))
     if (mode === 'shared') {
       // 共享：剩余名额 / 订单预留 / 生效共享绑定（docs/06 §9.1）。
       const sh = rs.filter((r) => r.u.status === 'available' && r.u.maxTenants >= 2 && occ(r).mode !== 'exclusive')
@@ -721,7 +722,8 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
     const shared = s.plan.exitMode === 'shared'
     const exclOK = (u: UpstreamRow) => (u.u.status === 'available' && occ(u).mode === 'none') || (u.u.status === 'reserved' && Boolean(order) && u.u.reservedOrderId === order?.id)
     const sharedOK = (u: UpstreamRow) => (u.u.status === 'available' || u.u.status === 'pending_verify') && sharedFree(u)
-    const inRegion = (u: UpstreamRow) => u.u.countryCode === s.plan.countryCode && u.u.city === s.plan.city
+    // 有效城市为空时匹配该国家全部资源；有城市时只匹配同城资源（D-27）。
+    const inRegion = (u: UpstreamRow) => u.u.countryCode === s.plan.countryCode && (s.plan.city === null || u.u.city === s.plan.city)
     // 独享：优先上限为 1 的资源；共享：人数最少优先（docs/06 §9.1）。
     const pick = resourceId
       ? db.upstreams.find((u) => u.u.id === resourceId && (shared ? sharedOK(u) : exclOK(u)))
@@ -729,7 +731,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         ? db.upstreams.filter((u) => sharedOK(u) && u.u.status === 'available' && inRegion(u)).sort((a, b) => occ(a).used - occ(b).used)[0]
         : db.upstreams.filter((u) => exclOK(u) && inRegion(u)).sort((a, b) => Number(b.u.maxTenants === 1) - Number(a.u.maxTenants === 1))[0]
     const failure: TaskRow['failure'] = !pick
-      ? { code: 'no_stock', reason: `无可售库存（${s.plan.country} · ${s.plan.city}），已回收端口` }
+      ? { code: 'no_stock', reason: `无可售库存（${s.plan.country} · ${s.plan.city ?? '不限城市'}），已回收端口` }
       : 'error' in pick.probe
         ? { code: 'exit_unverified', reason: `出口验证失败：${pick.probe.error}` }
         : undefined
@@ -1004,10 +1006,14 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
           const pv = plan.versions[0]!
           if (body.planVersionId && body.planVersionId !== pv.id) fail('conflict', '套餐已发布新版本，请刷新后重试')
           if (body.months < 1) fail('invalid', '月数至少为 1')
+          // 城市可选（D-27）：固定城市的套餐只能不填或填同一城市。
+          const chosen = body.city?.trim() || null
+          if (pv.city && chosen && chosen !== pv.city) fail('invalid', `该套餐的城市固定为${pv.city}，不能选择其他城市`)
           const amount = body.payment.method === 'admin_gift' ? 0 : pv.price.amount * body.months
           if (body.payment.amount.amount !== amount) fail('invalid', `金额必须等于订单金额 ¥${(amount / 100).toFixed(2)}`)
           const oid = nextId('ord')
           const s = blankSub({ name: body.name ?? pv.name, userId: u.id, planId: plan.id, orderId: oid, nodeId: body.nodeId ?? null })
+          if (!pv.city && chosen) s.plan.city = chosen
           const subId = s.id
           const order: AdminOrder = {
             id: oid,
@@ -1396,7 +1402,9 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         }
         if (!protocol || !host || !port) fail('invalid', '协议、主机、端口必填')
         if (port! < 1 || port! > 65535) fail('invalid', '端口超出范围')
-        if (!/^[a-z]{2}$/.test(body.countryCode) || !body.city.trim()) fail('invalid', '国家代码与城市必填')
+        if (!/^[a-z]{2}$/.test(body.countryCode) || !body.country.trim()) fail('invalid', '国家代码与国家必填')
+        // 城市可选（D-27）：空串与空白归一为 null。
+        const city = body.city?.trim() || null
         if (!db.nodes.some((n) => n.id === body.nodeId)) fail('invalid', '节点不存在')
         if (db.upstreams.some((r) => r.u.protocol === protocol && r.u.host === host && r.u.port === port && r.u.username === (username ?? ''))) fail('conflict', '同一协议、主机、端口与用户名的资源已存在')
         if (body.maxTenants !== undefined && (!Number.isInteger(body.maxTenants) || body.maxTenants < 1 || body.maxTenants > 100)) fail('invalid', '绑定上限须为 1～100 的整数')
@@ -1413,7 +1421,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
             hasPassword: Boolean(password),
             countryCode: body.countryCode,
             country: body.country,
-            city: body.city,
+            city,
             provider: body.provider ?? '',
             note: body.note ?? '',
             status: 'pending_verify',
@@ -1430,7 +1438,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
             createdAt: iso(now),
             updatedAt: iso(now),
           },
-          probe: password ? { ip: `203.0.113.${Math.floor(150 + r() * 80)}`, countryCode: body.countryCode, city: body.city, latencyMs: Math.round(120 + r() * 150) } : { error: '上游要求认证，但没有提供密码' },
+          probe: password ? { ip: `203.0.113.${Math.floor(150 + r() * 80)}`, countryCode: body.countryCode, city, latencyMs: Math.round(120 + r() * 150) } : { error: '上游要求认证，但没有提供密码' },
         }
         db.upstreams.unshift(row)
         audit('upstream.create', 'upstream', id, { protocol, host, port, hasPassword: Boolean(password) })
@@ -1463,9 +1471,11 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
           if (o.mode === 'shared' && n < 2) fail('precondition', '资源上有共享占用，绑定上限不能改为 1')
           if (o.mode === 'shared' && n < o.used) fail('precondition', `绑定上限不能低于当前占用 ${o.used}`)
         }
-        const { rowVersion: _rv, password, ...rest } = body
+        const { rowVersion: _rv, password, city, ...rest } = body
         void _rv
         Object.assign(r.u, Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)))
+        // 城市：缺省不改，null 或空串清除（D-27）。
+        if (city !== undefined) r.u.city = city?.trim() || null
         if (password) r.u.hasPassword = true
         if (connChanged) {
           r.u.status = 'pending_verify'
@@ -1518,7 +1528,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(body.code)) fail('invalid', '代码只能用小写字母、数字和连字符')
         if (db.plans.some((p) => p.code === body.code)) fail('conflict', '套餐代码已存在')
         const id = nextId('pln')
-        const p = { id, code: body.code, exitMode: body.exitMode ?? ('exclusive' as const), status: 'draft' as const, sortOrder: body.sortOrder ?? db.plans.length * 10 + 10, versions: [{ ...body.version, id: nextId('plv'), version: 1, createdAt: iso(now), createdBy: adminRef() }] }
+        const p = { id, code: body.code, exitMode: body.exitMode ?? ('exclusive' as const), status: 'draft' as const, sortOrder: body.sortOrder ?? db.plans.length * 10 + 10, versions: [{ ...body.version, city: body.version.city?.trim() || null, id: nextId('plv'), version: 1, createdAt: iso(now), createdBy: adminRef() }] }
         db.plans.push(p)
         audit('plan.create', 'plan', id, { code: body.code, exitMode: p.exitMode })
         return planView(p, true)
@@ -1533,7 +1543,7 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         writer('plan.version', 'plan', planId)
         const p = db.plans.find((x) => x.id === planId) ?? fail('not_found', '没有找到这个套餐')
         if (body.price.amount < 0 || body.includedBytes < 0 || body.concurrency < 1 || body.bandwidthMbps < 1 || body.periodDays < 1) fail('invalid', '数值不合法')
-        const v = { ...body, id: nextId('plv'), version: p.versions[0]!.version + 1, createdAt: iso(now), createdBy: adminRef() }
+        const v = { ...body, city: body.city?.trim() || null, id: nextId('plv'), version: p.versions[0]!.version + 1, createdAt: iso(now), createdBy: adminRef() }
         p.versions.unshift(v)
         audit('plan.version', 'plan', p.id, { version: v.version, price: body.price.amount })
         return planView(p, true)

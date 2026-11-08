@@ -49,7 +49,7 @@ export function PlanCell({ s }: { s: AdminSubscription }) {
       <CountryFlag code={s.plan.countryCode} name={s.plan.country} size="sm" />
       <span className="cell-stack">
         <span>
-          {s.plan.city} <span className="muted">v{s.plan.planVersion}</span>
+          {s.plan.city ?? '不限城市'} <span className="muted">v{s.plan.planVersion}</span>
         </span>
         <span className="muted">
           {s.plan.concurrency} 并发 · {s.plan.bandwidthMbps} Mbps

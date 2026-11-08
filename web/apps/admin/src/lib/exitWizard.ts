@@ -70,6 +70,15 @@ export function candidateFits(u: Upstream, exitMode: ExitMode): boolean {
   return o.mode === 'none'
 }
 
+/**
+ * 候选的城市是否符合订阅的有效城市（D-27，与服务端分配规则一致）：
+ * 订阅不限城市（null）时同国家的任何资源都符合，含没有城市的资源；订阅有城市时只有同城资源符合。
+ * 只用于排序与提示，管理员仍可换到其他城市（例如用户因地区原因申请换出口）。
+ */
+export function cityMatches(subCity: string | null, candidateCity: string | null): boolean {
+  return subCity === null || candidateCity === subCity
+}
+
 export function makeWizardReducer(planCountryCode: string, exitMode: ExitMode = 'exclusive') {
   return function reduce(s: WizardState, a: WizardAction): WizardState {
     switch (a.type) {

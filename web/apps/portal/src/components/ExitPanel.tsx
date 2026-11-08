@@ -125,7 +125,7 @@ export function ExitPanel({ sub }: { sub: IspSubscription }) {
     return (
       <Plate title="出口" labelledBy="exit-h">
         <div className="plate-pad plate-note">
-          开通时在 {sub.plan.country} · {sub.plan.city} 分配{sub.plan.exitMode === 'shared' ? '一个共享出口' : '一个独享出口'}，下单不锁定具体地址。
+          开通时在 {sub.plan.country} · {sub.plan.city ?? '不限城市'} 分配{sub.plan.exitMode === 'shared' ? '一个共享出口' : '一个独享出口'}，下单不锁定具体地址。
         </div>
       </Plate>
     )

@@ -13,7 +13,7 @@ import { CountryFlag, ExitModeChip, Plate, StateMark, fmtDateTime } from '@isp/u
 import { errorText, newIdempotencyKey, qk, useApi } from '../app/api'
 import { Callout, LoadError, Loading, Mono, PageHead, State } from '../components/bits'
 import { UpstreamDialog } from '../components/UpstreamDialog'
-import { STEPS, canSubmit, candidateFits, initialWizard, makeWizardReducer, type WizardState } from '../lib/exitWizard'
+import { STEPS, canSubmit, candidateFits, cityMatches, initialWizard, makeWizardReducer, type WizardState } from '../lib/exitWizard'
 import { useProbe, useTask } from '../lib/jobs'
 import { EXIT_REASON, TASK_KIND, TASK_STATE, UPSTREAM } from '../lib/status'
 
@@ -133,7 +133,10 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: IspDetail; st: Wizard
     }
   }
   const shared = s.plan.exitMode === 'shared'
-  const items = (cands.data?.items ?? []).filter((u) => u.id !== s.exit?.resourceId && candidateFits(u, s.plan.exitMode))
+  // 与订阅同城（或订阅不限城市）的候选排在前面；不同城的仍可选，地区列标注“城市不同”（D-27）。
+  const items = (cands.data?.items ?? [])
+    .filter((u) => u.id !== s.exit?.resourceId && candidateFits(u, s.plan.exitMode))
+    .sort((a, b) => Number(cityMatches(s.plan.city, b.city)) - Number(cityMatches(s.plan.city, a.city)))
   return (
     <>
       <div className="usage-head">
@@ -186,7 +189,8 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: IspDetail; st: Wizard
                 render: (_, u) => (
                   <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                     <CountryFlag code={u.countryCode} name={u.country} size="sm" />
-                    {u.city}
+                    {u.city ?? '—'}
+                    {!cityMatches(s.plan.city, u.city) && <span className="muted small">城市不同</span>}
                   </span>
                 ),
               },
@@ -237,7 +241,7 @@ function CandidateStep({ s, st, dispatch, disabled }: { s: IspDetail; st: Wizard
       <UpstreamDialog
         value={adding ? 'new' : null}
         nodes={(nodes.data ?? []).map((n) => ({ value: n.id, label: n.name }))}
-        defaults={{ ...(s.nodeId ? { nodeId: s.nodeId } : {}), countryCode: s.plan.countryCode, city: s.plan.city }}
+        defaults={{ ...(s.nodeId ? { nodeId: s.nodeId } : {}), countryCode: s.plan.countryCode, city: s.plan.city ?? '' }}
         onClose={() => setAdding(false)}
         onCreated={(u) => dispatch({ type: 'select', resourceId: u.id })}
       />

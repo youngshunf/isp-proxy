@@ -63,7 +63,11 @@ export default function RenewPage() {
   }
   const c = catalog.data
   // 续时长按该地区当前上架套餐的价格估算；最终金额以服务端生成的订单为准。
-  const plan = c.plans.find((p) => p.countryCode === s.plan.countryCode && p.city === s.plan.city)
+  // 不限城市的套餐（D-27）订阅里存的是所选城市：先按同城同类型找，找不到再按同国家同类型的不限城市套餐。
+  const plan =
+    c.plans.find((p) => p.countryCode === s.plan.countryCode && p.city === s.plan.city && p.exitMode === s.plan.exitMode) ??
+    c.plans.find((p) => p.countryCode === s.plan.countryCode && p.city === null && p.exitMode === s.plan.exitMode) ??
+    c.plans.find((p) => p.countryCode === s.plan.countryCode && p.city === s.plan.city)
   const monthly = plan?.monthlyPrice.amount ?? null
   const retained = s.lifecycle === 'retained'
   const expired = s.blockers.includes('expired') || s.blockers.includes('released')

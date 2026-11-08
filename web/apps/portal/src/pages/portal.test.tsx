@@ -62,7 +62,7 @@ describe('购买', () => {
   it('没有数量步进器；下单数量固定为 1，重复点击只生成一个订单', async () => {
     // 带一点延迟：第二次点击发生在第一次请求返回之前（真实网络下的双击）。
     const { user, api } = renderApp('/buy', createMockApi({ latency: [40, 40] }))
-    await screen.findByText('选择地区')
+    await screen.findByText('选择套餐')
     expect(screen.queryByRole('group', { name: '数量' })).toBeNull()
     expect(screen.queryByRole('button', { name: '增加' })).toBeNull()
     await user.click(screen.getByRole('radio', { name: '美国 洛杉矶' }))
@@ -76,12 +76,12 @@ describe('购买', () => {
 
   it('下单失败：展示服务端给出的说明，不跳转', async () => {
     const { user, api } = renderApp('/buy')
-    await screen.findByText('选择地区')
+    await screen.findByText('选择套餐')
     api.failNext('createOrder', new ApiError('precondition', '平台尚未配置收款说明，暂时不能下单'))
     await user.click(screen.getByRole('radio', { name: '美国 洛杉矶' }))
     await user.click(screen.getByRole('button', { name: /提交订单/ }))
     expect(await screen.findByText('平台尚未配置收款说明，暂时不能下单')).toBeTruthy()
-    expect(screen.getByText('选择地区')).toBeTruthy()
+    expect(screen.getByText('选择套餐')).toBeTruthy()
   })
 })
 

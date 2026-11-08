@@ -57,14 +57,16 @@ function seed(now: number) {
   const catalog: Catalog = {
     brand: 'ISP 代理（演示）',
     plans: [
-      { id: 'us-lax', versionId: 'us-lax-v1', exitMode: 'exclusive', countryCode: 'us', country: '美国', city: '洛杉矶', monthlyPrice: cny(168), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      { id: 'us-lax', versionId: 'us-lax-v1', name: '美国 · 洛杉矶 包月', cities: [], exitMode: 'exclusive', countryCode: 'us', country: '美国', city: '洛杉矶', monthlyPrice: cny(168), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
       // 共享出口套餐（D-24）：同一出口最多由 N 个订阅共用，价格更低。
-      { id: 'us-lax-shared', versionId: 'us-lax-shared-v1', exitMode: 'shared', countryCode: 'us', country: '美国', city: '洛杉矶', monthlyPrice: cny(68), includedBytes: 20 * GB, concurrency: 20, bandwidthMbps: 10, stock: 'plenty' },
-      { id: 'us-nyc', versionId: 'us-nyc-v1', exitMode: 'exclusive', countryCode: 'us', country: '美国', city: '纽约', monthlyPrice: cny(178), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'low' },
-      { id: 'gb-lon', versionId: 'gb-lon-v1', exitMode: 'exclusive', countryCode: 'gb', country: '英国', city: '伦敦', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
-      { id: 'de-fra', versionId: 'de-fra-v1', exitMode: 'exclusive', countryCode: 'de', country: '德国', city: '法兰克福', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
-      { id: 'jp-tyo', versionId: 'jp-tyo-v1', exitMode: 'exclusive', countryCode: 'jp', country: '日本', city: '东京', monthlyPrice: cny(198), includedBytes: 100 * GB, concurrency: 80, bandwidthMbps: 30, stock: 'low' },
-      { id: 'sg-sin', versionId: 'sg-sin-v1', exitMode: 'exclusive', countryCode: 'sg', country: '新加坡', city: '新加坡', monthlyPrice: cny(158), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'out' },
+      { id: 'us-lax-shared', versionId: 'us-lax-shared-v1', name: '美国 · 洛杉矶 共享包月', cities: [], exitMode: 'shared', countryCode: 'us', country: '美国', city: '洛杉矶', monthlyPrice: cny(68), includedBytes: 20 * GB, concurrency: 20, bandwidthMbps: 10, stock: 'plenty' },
+      // 不限城市套餐（D-27）：可在当前有货的城市中挑一个，不选由系统在全国范围分配。
+      { id: 'us-any', versionId: 'us-any-v1', name: 'Flex · 美国不限城市', exitMode: 'exclusive', countryCode: 'us', country: '美国', city: null, cities: [{ name: '洛杉矶', stock: 'plenty' }, { name: '纽约', stock: 'low' }], monthlyPrice: cny(158), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      { id: 'us-nyc', versionId: 'us-nyc-v1', name: '美国 · 纽约 包月', cities: [], exitMode: 'exclusive', countryCode: 'us', country: '美国', city: '纽约', monthlyPrice: cny(178), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'low' },
+      { id: 'gb-lon', versionId: 'gb-lon-v1', name: '英国 · 伦敦 包月', cities: [], exitMode: 'exclusive', countryCode: 'gb', country: '英国', city: '伦敦', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      { id: 'de-fra', versionId: 'de-fra-v1', name: '德国 · 法兰克福 包月', cities: [], exitMode: 'exclusive', countryCode: 'de', country: '德国', city: '法兰克福', monthlyPrice: cny(188), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'plenty' },
+      { id: 'jp-tyo', versionId: 'jp-tyo-v1', name: '日本 · 东京 包月', cities: [], exitMode: 'exclusive', countryCode: 'jp', country: '日本', city: '东京', monthlyPrice: cny(198), includedBytes: 100 * GB, concurrency: 80, bandwidthMbps: 30, stock: 'low' },
+      { id: 'sg-sin', versionId: 'sg-sin-v1', name: '新加坡 包月', cities: [], exitMode: 'exclusive', countryCode: 'sg', country: '新加坡', city: '新加坡', monthlyPrice: cny(158), includedBytes: 50 * GB, concurrency: 50, bandwidthMbps: 20, stock: 'out' },
     ],
     trafficPacks: [
       { id: 't10', versionId: 't10-v1', bytes: 10 * GB, price: cny(18) },
@@ -609,6 +611,12 @@ export function createMockApi(opts: MockOptions = {}): MockPortalApi {
           const plan: Plan | undefined = db.catalog.plans.find((p) => p.id === input.planId)
           if (!plan) throw new ApiError('not_found', '套餐不存在或已下架')
           if (plan.stock === 'out') throw new ApiError('conflict', '该地区暂时无货，请选择其他地区')
+          // 城市可选（D-27）：固定城市的套餐只能不选或选同一城市；不限城市的套餐在所选城市内预留。
+          const chosen = input.city?.trim() || null
+          if (plan.city && chosen && chosen !== plan.city)
+            throw new ApiError('invalid', `该套餐的城市固定为${plan.city}，不能选择其他城市`)
+          if (!plan.city && chosen && !plan.cities.some((c) => c.name === chosen && c.stock !== 'out'))
+            throw new ApiError('conflict', '该地区暂时无货，请稍后再试或选择其他地区')
           const unpaid = db.orders.filter((o) => o.kind === 'new' && o.payment === 'awaiting').length
           if (unpaid >= db.catalog.rules.maxUnpaidNewOrders)
             throw new ApiError('conflict', `最多同时保留 ${db.catalog.rules.maxUnpaidNewOrders} 个未付款新购订单`)
@@ -616,8 +624,8 @@ export function createMockApi(opts: MockOptions = {}): MockPortalApi {
           order = {
             ...base, kind: 'new', amount: cny(yuan), subscriptionId: null, subscriptionName: null,
             lines: [{
-              label: `${plan.country} · ${plan.city} ${plan.exitMode === 'shared' ? '共享' : ''}包月`,
-              detail: `${input.months} 个月 · 含 ${plan.includedBytes / GB} GB · 并发 ${plan.concurrency} · ${plan.bandwidthMbps} Mbps`,
+              label: plan.name,
+              detail: `${input.months} 个月 · 含 ${plan.includedBytes / GB} GB · 并发 ${plan.concurrency} · ${plan.bandwidthMbps} Mbps${!plan.city && chosen ? `，城市：${chosen}` : ''}`,
               amount: cny(yuan),
             }],
             steps: [{ label: '下单', state: 'done', at: iso(now) }, { label: '核款确认', state: 'current', at: null }, { label: '开通中', state: 'todo', at: null }, { label: '已交付', state: 'todo', at: null }],

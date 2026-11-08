@@ -81,7 +81,7 @@ export interface SubRow {
   name: string
   userId: string
   nodeId: string | null
-  plan: { planId: string; planVersionId: string; planVersion: number; name: string; exitMode: ExitMode; countryCode: string; country: string; city: string; concurrency: number; bandwidthMbps: number }
+  plan: { planId: string; planVersionId: string; planVersion: number; name: string; exitMode: ExitMode; countryCode: string; country: string; city: string | null; concurrency: number; bandwidthMbps: number }
   /** 服务器直出代理（D-25）：有值时 plan 只是占位（视图里输出 null），没有出口与账本。 */
   direct?: { bandwidthMbps: number; maxConnections: number }
   lifecycle: AdminLifecycle
@@ -137,7 +137,7 @@ export interface PackRow {
 /** 上游资源 + mock 内部的“真实出口”（经该上游访问回显端点会看到什么）。 */
 export interface UpstreamRow {
   u: Upstream
-  probe: { ip: string; countryCode: string; city: string; latencyMs: number } | { error: string }
+  probe: { ip: string; countryCode: string; city: string | null; latencyMs: number } | { error: string }
   /** 提交切换后数据面复核失败（演示失败回滚）。 */
   failsOnApply?: boolean
   /** 共享名额冷却（D-24）：共享订阅离开后名额冷却到这些时刻，期间不再分配（docs/04 §7.6）。 */
@@ -289,7 +289,7 @@ export function seed(now: number): Db {
   ]
 
   // ---------------------------------------------------------------- 套餐、流量包、规则
-  const planDefs = [
+  const planDefs: { code: string; cc: string; country: string; city: string | null; price: number; gb: number; conc: number; bw: number; status: SaleStatus; mode?: ExitMode }[] = [
     { code: 'us-lax', cc: 'us', country: '美国', city: '洛杉矶', price: 168, gb: 50, conc: 50, bw: 20, status: 'on_sale' as const },
     { code: 'us-nyc', cc: 'us', country: '美国', city: '纽约', price: 178, gb: 50, conc: 50, bw: 20, status: 'on_sale' as const },
     { code: 'gb-lon', cc: 'gb', country: '英国', city: '伦敦', price: 188, gb: 50, conc: 50, bw: 20, status: 'on_sale' as const },
@@ -299,13 +299,15 @@ export function seed(now: number): Db {
     { code: 'ca-yvr', cc: 'ca', country: '加拿大', city: '温哥华', price: 178, gb: 50, conc: 50, bw: 20, status: 'draft' as const },
     // 共享出口套餐（D-24）：同一出口最多由资源的绑定上限个订阅共用。
     { code: 'us-lax-shared', cc: 'us', country: '美国', city: '洛杉矶', price: 68, gb: 20, conc: 20, bw: 10, status: 'on_sale' as const, mode: 'shared' as const },
+    // 不限城市套餐（D-27）：城市为空，在该国家全部资源（含没有城市的资源）中分配；用户下单时可选城市。
+    { code: 'us-any', cc: 'us', country: '美国', city: null, price: 158, gb: 50, conc: 50, bw: 20, status: 'on_sale' as const },
   ]
   const plans: PlanRow[] = planDefs.map((d, i) => {
     const id = fid('pln', d.code)
     const v1: PlanVersion = {
       id: fid('plv', `${d.code}:1`),
       version: 1,
-      name: `${d.country} · ${d.city} ${'mode' in d ? '共享' : ''}包月`,
+      name: `${d.country} · ${d.city ?? '不限城市'} ${d.mode === 'shared' ? '共享' : ''}包月`,
       countryCode: d.cc,
       country: d.country,
       city: d.city,
@@ -321,7 +323,7 @@ export function seed(now: number): Db {
     if (d.code === 'us-lax') {
       versions.unshift({ ...v1, id: fid('plv', `${d.code}:2`), version: 2, price: cny(d.price), createdAt: iso(now - 12 * DAY) })
     }
-    return { id, code: d.code, exitMode: 'mode' in d && d.mode ? d.mode : ('exclusive' as const), status: d.status, sortOrder: (i + 1) * 10, versions }
+    return { id, code: d.code, exitMode: d.mode ?? ('exclusive' as const), status: d.status, sortOrder: (i + 1) * 10, versions }
   })
   const planBy = (code: string) => plans.find((p) => p.code === code)!
 
@@ -448,6 +450,8 @@ export function seed(now: number): Db {
       createdAgo?: number
       /** 绑定上限（D-24）；mock 里已占用的独享资源默认 1，共享资源显式给 ≥2。 */
       maxTenants?: number
+      /** 覆盖套餐的城市；null 表示供应商没有给出城市（D-27）。 */
+      city?: string | null
     },
   ): UpstreamRow => {
     const p = planBy(o.plan).versions[0]!
@@ -463,7 +467,7 @@ export function seed(now: number): Db {
         hasPassword: true,
         countryCode: p.countryCode,
         country: p.country,
-        city: p.city,
+        city: o.city !== undefined ? o.city : p.city,
         provider: o.provider ?? '示意供应商 A',
         note: o.note ?? '',
         status: o.status,
@@ -1017,6 +1021,18 @@ export function seed(now: number): Db {
     status: 'available',
     exit: { ip: '203.0.113.77', countryCode: 'us', city: '洛杉矶', latencyMs: 164 },
     createdAgo: 2 * DAY,
+  })
+  // 没有城市的上游（D-27）：只会分给不限城市、且没有选城市的订阅。
+  upstream('us-nocity', {
+    node: nodeLax,
+    plan: 'us-lax',
+    city: null,
+    host: 'gw-n1.isp-c.example.net',
+    port: 1080,
+    provider: '示意供应商 C',
+    status: 'available',
+    exit: { ip: '203.0.113.95', countryCode: 'us', city: null, latencyMs: 210 },
+    createdAgo: 3 * DAY,
   })
   upstream('cand-ok2', {
     node: nodeLax,

@@ -1853,7 +1853,8 @@ export interface components {
             ip: string;
             countryCode: components["schemas"]["CountryCode"];
             country: string;
-            city: string;
+            /** @description 检测到的城市，没有时取资源声明的城市；都没有为 null（D-27） */
+            city: string | null;
             check: components["schemas"]["ExitCheck"];
             latencyMs: number | null;
             /** Format: date-time */
@@ -1879,7 +1880,8 @@ export interface components {
             name: string;
             countryCode: components["schemas"]["CountryCode"];
             country: string;
-            city: string;
+            /** @description 购买时的有效城市（套餐固定的或用户选择的）；null 表示不限城市（D-27） */
+            city: string | null;
             concurrency: number;
             bandwidthMbps: number;
         };
@@ -1998,10 +2000,18 @@ export interface components {
             id: string;
             /** @description 当前价格版本，下单时可回传用于校验 */
             versionId: string;
+            /** @description 当前版本的套餐名称（D-27） */
+            name: string;
             exitMode: components["schemas"]["ExitMode"];
             countryCode: components["schemas"]["CountryCode"];
             country: string;
-            city: string;
+            /** @description 套餐固定的城市；null 表示不限城市，下单时可在 cities 中选（D-27） */
+            city: string | null;
+            /**
+             * @description 不限城市的套餐：该国家、该出口类型下当前有货的城市（按名称排序，只含有城市的资源）；固定城市的套餐为空数组。
+             *     不选城市时 stock 按整个国家计（含没有城市的资源）。
+             */
+            cities: components["schemas"]["PlanCity"][];
             monthlyPrice: components["schemas"]["Money"];
             /**
              * Format: int64
@@ -2010,6 +2020,10 @@ export interface components {
             includedBytes: number;
             concurrency: number;
             bandwidthMbps: number;
+            stock: components["schemas"]["StockLevel"];
+        };
+        PlanCity: {
+            name: string;
             stock: components["schemas"]["StockLevel"];
         };
         TrafficPack: {
@@ -2103,6 +2117,11 @@ export interface components {
             months: number;
             /** @description 一次订单一个订阅（D-13），只能为 1 */
             quantity: number;
+            /**
+             * @description 可选城市（D-27）。套餐固定城市时只能缺省或与之相同，否则 422；不限城市的套餐在该城市内预留，该城市无货 409。
+             *     缺省或空串表示不限城市（系统在该国家内分配）。
+             */
+            city?: string;
         };
         OrderInputRenewTime: {
             /**
@@ -2279,7 +2298,8 @@ export interface components {
             ip: string | null;
             countryCode: components["schemas"]["CountryCode"] | null;
             country: string;
-            city: string;
+            /** @description 检测到的城市，没有时取资源声明的城市；都没有为 null */
+            city: string | null;
             check: components["schemas"]["ExitCheck"] | null;
             latencyMs: number | null;
             /** Format: date-time */
@@ -2388,6 +2408,8 @@ export interface components {
             nodeId?: string;
             /** @description 指定可售资源；不指定则按套餐地域分配 */
             resourceId?: string;
+            /** @description 可选城市，规则同自助下单 OrderInputNew.city（D-27） */
+            city?: string | null;
             payment: components["schemas"]["ConfirmPaymentInput"];
         };
         AdminCreateSubscriptionResult: {
@@ -2668,7 +2690,8 @@ export interface components {
             hasPassword: boolean;
             countryCode: components["schemas"]["CountryCode"];
             country: string;
-            city: string;
+            /** @description 供应商声明的城市；未填为 null（D-27） */
+            city: string | null;
             provider: string;
             note: string;
             status: components["schemas"]["UpstreamStatus"];
@@ -2739,7 +2762,8 @@ export interface components {
             nodeId: string;
             countryCode: components["schemas"]["CountryCode"];
             country: string;
-            city: string;
+            /** @description 可选；缺省、null 或空串表示不填（D-27） */
+            city?: string | null;
             provider?: string;
             note?: string;
             /** @description 绑定上限；不填取配置 core.shared_exit_default_capacity（默认 3） */
@@ -2757,7 +2781,8 @@ export interface components {
             password?: string;
             countryCode?: components["schemas"]["CountryCode"];
             country?: string;
-            city?: string;
+            /** @description 缺省不改；null 或空串清除（D-27） */
+            city?: string | null;
             provider?: string;
             note?: string;
             /** @description 不能低于当前共享占用；有共享占用时不能改为 1 */
@@ -2783,7 +2808,8 @@ export interface components {
             name: string;
             countryCode: components["schemas"]["CountryCode"];
             country: string;
-            city: string;
+            /** @description null 表示不限城市（D-27） */
+            city: string | null;
             price: components["schemas"]["Money"];
             periodDays: number;
             /** Format: int64 */
@@ -2798,7 +2824,8 @@ export interface components {
             name: string;
             countryCode: components["schemas"]["CountryCode"];
             country: string;
-            city: string;
+            /** @description 可选；缺省、null 或空串表示不限城市（D-27） */
+            city?: string | null;
             price: components["schemas"]["Money"];
             periodDays: number;
             /** Format: int64 */

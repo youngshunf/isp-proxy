@@ -25,6 +25,7 @@ export interface FormState {
   password: string
   nodeId?: string
   countryCode?: string
+  /** 城市可选（D-27）：留空表示供应商没有给出城市。 */
   city: string
   provider: string
   note: string
@@ -70,7 +71,7 @@ export function UpstreamDialog({
         password: '',
         nodeId: value.nodeId,
         countryCode: value.countryCode,
-        city: value.city,
+        city: value.city ?? '',
         provider: value.provider,
         note: value.note,
         maxTenants: value.maxTenants,
@@ -95,7 +96,8 @@ export function UpstreamDialog({
             password: f.password || undefined,
             countryCode: f.countryCode,
             country: country?.label,
-            city: f.city.trim(),
+            // 留空即清除城市（null）。
+            city: f.city.trim() || null,
             provider: f.provider,
             note: f.note,
             maxTenants: f.maxTenants !== null && f.maxTenants !== editing.maxTenants ? f.maxTenants : undefined,
@@ -109,7 +111,7 @@ export function UpstreamDialog({
             nodeId: f.nodeId!,
             countryCode: f.countryCode!,
             country: country?.label ?? f.countryCode!,
-            city: f.city.trim(),
+            city: f.city.trim() || undefined,
             provider: f.provider || undefined,
             note: f.note || undefined,
             maxTenants: f.maxTenants ?? undefined,
@@ -129,7 +131,7 @@ export function UpstreamDialog({
 
   const connReady = f.mode === 'url' ? f.url.trim().length > 0 : f.host.trim().length > 0 && !!f.port
   const shared = editing?.occupancy.mode === 'shared' ? editing.occupancy : null
-  const ready = connReady && !!f.nodeId && !!f.countryCode && f.city.trim().length > 0
+  const ready = connReady && !!f.nodeId && !!f.countryCode
 
   return (
     <Modal
@@ -200,8 +202,10 @@ export function UpstreamDialog({
             <Select aria-label="国家" value={f.countryCode} onChange={(v) => set('countryCode', v)} options={COUNTRIES} />
           </label>
           <label className="field" style={{ marginTop: 12 }}>
-            <span className="field-label">城市</span>
-            <Input aria-label="城市" value={f.city} onChange={(e) => set('city', e.target.value)} />
+            <span className="field-label">
+              城市<em>可选</em>
+            </span>
+            <Input aria-label="城市" value={f.city} placeholder="留空 = 未知城市" onChange={(e) => set('city', e.target.value)} />
           </label>
           <label className="field" style={{ marginTop: 12 }}>
             <span className="field-label">供应商</span>

@@ -189,6 +189,8 @@ export default function SubscriptionDetailPage() {
                       {s.plan.name} <span className="muted">v{s.plan.planVersion}</span>
                     </span>,
                   ],
+                  // 有效城市（D-27）：套餐固定的或下单时选的；为空表示不限城市。
+                  ['城市', s.plan.city ?? '不限城市'],
                   ['规格', `${s.plan.concurrency} 并发 · ${s.plan.bandwidthMbps} Mbps · 周期 ${s.time.periodDays} 天`],
                   ['生命周期', LIFECYCLE[s.lifecycle]],
                   ['首次可用', s.firstReadyAt ? fmtDateTime(s.firstReadyAt) : null],
@@ -221,7 +223,7 @@ export default function SubscriptionDetailPage() {
                     items={[
                       ['出口 IP', <Mono key="ip">{s.exit.verifiedIp ?? '未验证'}</Mono>],
                       ['检测', s.exit.check ? <State key="c" view={EXIT_CHECK[s.exit.check]} strong={false} /> : '未检测'],
-                      ['地区', `${s.exit.country} · ${s.exit.city}`],
+                      ['地区', `${s.exit.country} · ${s.exit.city ?? '—'}`],
                       ['延迟', s.exit.latencyMs === null ? null : `${s.exit.latencyMs} ms`],
                       ['检测时间', s.exit.checkedAt ? <Ago key="t" at={s.exit.checkedAt} /> : null],
                       ['检测错误', s.exit.checkError],

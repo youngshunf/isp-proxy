@@ -74,7 +74,7 @@ export default function UpstreamsPage() {
       render: (_, u) => (
         <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
           <CountryFlag code={u.countryCode} name={u.country} size="sm" />
-          {u.city}
+          {u.city ?? '—'}
         </span>
       ),
     },
