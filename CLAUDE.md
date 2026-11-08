@@ -31,7 +31,7 @@ make all
 | `internal/agent/node/` | 节点运行时：读 agent 配置（`deploy/agent.example.yaml`），mTLS 连控制面按期望状态对账、上报、探测，落盘最后已应用状态（`desired.json`，0600，含凭据）。由 `gost -agent-config <file>` 启动；该模式不开放 GOST 原生 API、禁止重载（重载会清空 `isp-auth` 与出口链并导致直连，见 docs/04 §2） |
 | `tests/isp/` | 平台 E2E（build tag `ispe2e`）：每个 docs/02 场景一个测试；环境 `env_test.go`、类型化客户端 `client_test.go`/`admin_test.go`/`user_test.go`、四种接入 `proxy_test.go`、业务流程 `flows_test.go`。见 docs/05 §7.1 |
 | `internal/agent/agenttest/` | 测试辅助：伪控制面（`agentproto.NewHandler` + 开发证书）、伪 ISP 上游（http/https/socks5）、三种协议客户端 |
-| `cmd/isp-control/` | 控制面入口：`serve`（启动即迁移，`:8080` 对外 API，`:8443` 节点 mTLS）、`migrate`、`dev-certs`、`admin create`、`seed-dev`（含独享与共享示例套餐）；YAML 配置 + 环境变量密钥（docs/06 §2）。`core.shared_exit_default_capacity`（默认 3）是录入上游不填绑定上限时的默认值（D-24） |
+| `cmd/isp-control/` | 控制面入口：`serve`（启动即迁移，`:8080` 对外 API，`:8443` 节点 mTLS）、`migrate`、`dev-certs`、`admin create`、`mail-test`（按配置直发测试邮件）、`seed-dev`（含独享与共享示例套餐）；YAML 配置 + 环境变量密钥（docs/06 §2）。`core.shared_exit_default_capacity`（默认 3）是录入上游不填绑定上限时的默认值（D-24） |
 | `cmd/isp-devstack/` | 本机开发栈：一条命令起一次性 PostgreSQL、`isp-control`（文件投递邮件）、seed-dev、管理员（打印 TOTP 密钥）、假 ISP 上游与回显端点（agenttest）、`gost -agent-config`；打印地址与账号，Ctrl-C 清理；就绪信息写 `<dir>/state.json`（浏览器 E2E 读它）。见 docs/05 §6.1 |
 | `internal/control/httpx/` | HTTP 公共约定：`*httpx.Error` 与错误码映射、严格 `DecodeJSON`、`Route{Method, Pattern, Auth}`、`UserFrom`/`AdminFrom`、`ClientIP` |
 | `internal/control/api/` | 组装全部业务包路由（`Assemble`，ctl-core 接入点在 `wiring.go`），统一执行 CSRF 双提交、会话校验、`VerifiedUser`/封禁只读/viewer 只读；契约测试断言路由集合 = `apispec`（暂缺清单 `notYetImplemented` 已清空，`ISP_REQUIRE_COMPLETE_API=1` 强制） |

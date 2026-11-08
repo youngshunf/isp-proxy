@@ -5,6 +5,7 @@
 //	isp-control dev-certs -dir ./dev-certs -node nod_… 生成开发用 CA、服务端与节点证书（不进 Git）
 //	isp-control admin create -email … -name … [-role admin|viewer]   建立管理员（密码取 ISP_ADMIN_PASSWORD 或标准输入）
 //	isp-control seed-dev  [-config …]                写入开发种子数据（示例价格与上游，仅开发使用）
+//	isp-control mail-test -config … -to <邮箱>      按配置直接发一封测试邮件（核对 SMTP，不连数据库）
 //
 // 环境变量：ISP_DATABASE_URL、ISP_SECRET_KEY（或 ISP_SECRET_KEY_FILE）、ISP_SMTP_PASSWORD、ISP_AGENT_TLS_KEY_FILE。
 package main
@@ -30,6 +31,7 @@ const usage = `用法：
   isp-control dev-certs [-dir ./dev-certs] [-node <节点ID>]... [-host <服务端主机名或 IP>]...
   isp-control admin create -email <邮箱> [-name <显示名>] [-role admin|viewer]
   isp-control seed-dev  [-config isp-control.yaml] [-user-email dev@example.com]
+  isp-control mail-test [-config isp-control.yaml] -to <邮箱>
 
 环境变量：ISP_DATABASE_URL、ISP_SECRET_KEY（或 ISP_SECRET_KEY_FILE）、ISP_SMTP_PASSWORD、ISP_AGENT_TLS_KEY_FILE、ISP_ADMIN_PASSWORD
 `
@@ -56,6 +58,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		err = cmdAdminCreate(ctx, args[2:], stdin, stdout)
 	case "seed-dev":
 		err = cmdSeedDev(ctx, args[1:], stdout)
+	case "mail-test":
+		err = cmdMailTest(ctx, args[1:], stdout)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0

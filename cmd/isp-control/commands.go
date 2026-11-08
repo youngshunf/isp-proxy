@@ -14,6 +14,7 @@ import (
 	"github.com/go-gost/gost/internal/agentproto"
 	"github.com/go-gost/gost/internal/control/account"
 	"github.com/go-gost/gost/internal/control/admin"
+	"github.com/go-gost/gost/internal/control/mail"
 	"github.com/go-gost/gost/internal/control/secret"
 	"github.com/go-gost/gost/internal/control/store"
 	"github.com/jackc/pgx/v5"
@@ -132,6 +133,43 @@ func cmdAdminCreate(ctx context.Context, args []string, stdin io.Reader, stdout 
 		return err
 	}
 	fmt.Fprintf(stdout, "已创建管理员 %s（%s，角色 %s）。首次登录后台时绑定 TOTP 并保存恢复码。\n", id, strings.ToLower(strings.TrimSpace(*email)), *role)
+	return nil
+}
+
+// cmdMailTest 按配置（mail.* 与 ISP_SMTP_PASSWORD）直接投递一封测试邮件，不经发件箱、不连数据库，
+// 用于部署后核对 SMTP 账号、端口与发件人是否可用；失败时把 SMTP 服务器的原始错误打印出来。
+func cmdMailTest(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("mail-test", flag.ContinueOnError)
+	cfgPath := fs.String("config", "", "YAML 配置文件")
+	to := fs.String("to", "", "收件人邮箱")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *to == "" {
+		return errors.New("必须提供 -to")
+	}
+	rcpt, err := account.NormalizeEmail(*to)
+	if err != nil {
+		return fmt.Errorf("-to %q 不是有效的邮箱", *to)
+	}
+	cfg, err := LoadConfig(*cfgPath)
+	if err != nil {
+		return err
+	}
+	sender, err := cfg.Sender()
+	if err != nil {
+		return err
+	}
+	brand := cfg.Mail.Brand
+	if brand == "" {
+		brand = "驿卡"
+	}
+	body := fmt.Sprintf("这是一封测试邮件，用于确认%s的发信设置可用。\n\n发信方式：%s\n站点地址：%s\n\n收到即说明验证码邮件可以正常送达，无需回复。\n", brand, cfg.Mail.Mode, cfg.Mail.SiteURL)
+	m := &mail.Rendered{ID: store.NewID("mtt"), From: cfg.Mail.From, To: rcpt, Subject: brand + " 发信测试", Body: body}
+	if err := sender.Send(ctx, m); err != nil {
+		return fmt.Errorf("发送失败: %w", err)
+	}
+	fmt.Fprintf(stdout, "测试邮件已交给 %s 投递：%s → %s\n", cfg.Mail.Mode, cfg.Mail.From, rcpt)
 	return nil
 }
 

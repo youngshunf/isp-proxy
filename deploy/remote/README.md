@@ -58,11 +58,29 @@ deploy/remote/yika.sh hk ssh             # 登录服务器
 
 `MAIL_MODE=file` 时不真实发信。注册、找回密码的验证码用 `yika.sh <目标> mail` 查看。
 
-改成真实发信的步骤：
+**Gmail（推荐）**：Gmail 发信要用应用专用密码。先给账号开两步验证，再到 https://myaccount.google.com/apppasswords 生成一个 16 位应用专用密码。然后执行：
 
-1. 在目标配置里改成 `MAIL_MODE=smtp`，填好 `SMTP_*` 与 `MAIL_FROM`。
-2. 在服务器 `/etc/yika/secrets.env` 里写 `SMTP_PASSWORD=…`。
-3. 再 `deploy` 一次。
+```bash
+deploy/remote/yika.sh hk smtp-gmail 你的地址@gmail.com
+```
+
+按提示输入应用专用密码（不回显）后，脚本会依次：
+
+1. 把密码经 ssh 写进服务器 `/etc/yika/secrets.env`；
+2. 把目标配置改成 `smtp.gmail.com:587` STARTTLS，发件人设为该 Gmail 地址；
+3. 部署；
+4. 给该地址发一封“发信测试”邮件。
+
+Gmail 个人账号每天大约能发 500 封。发件人只能是登录的账号本身，或已在 Gmail 里验证过的别名。
+
+**Outlook / Hotmail 个人邮箱不能用**：微软已停用个人邮箱 SMTP 的密码认证，只支持 OAuth2，目前的发信代码不支持。
+
+**其他 SMTP 服务商**：
+
+1. 在目标配置里填 `MAIL_MODE=smtp`、`SMTP_ADDR`、`SMTP_SECURITY`、`SMTP_USERNAME`、`MAIL_FROM`。
+2. 执行 `yika.sh <目标> smtp-password` 输入密码。
+3. 执行 `deploy`。
+4. 用 `yika.sh <目标> mail-test <邮箱>` 验证；发送失败时会打印 SMTP 服务器返回的错误。
 
 ## 已知限制
 

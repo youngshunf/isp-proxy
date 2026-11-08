@@ -5,6 +5,8 @@
 #   server.sh status         服务状态与健康检查
 #   server.sh backup         生成完整备份（数据库 + /etc/yika 密钥与证书），打印备份文件路径
 #   server.sh mail [N]       查看最近 N 封文件投递的邮件（mail.mode = file 时，验证码在这里）
+#   server.sh mail-test <邮箱>        按当前配置发一封测试邮件
+#   server.sh set-smtp-password      从标准输入读 SMTP 密码写入 /etc/yika/secrets.env（再 install 一次生效）
 #
 # 同目录需要：target.env、bin/isp-control、bin/gost、web/portal、web/admin、units/、backup.sh；
 # 可选 tls/fullchain.pem + tls/key.pem（正式证书）、restore/backup.tar.gz（从备份恢复，只用于全新服务器）。
@@ -587,11 +589,43 @@ for f in reversed(files):
 EOF
 }
 
+# 从标准输入读一行，写入 secrets.env 的 SMTP_PASSWORD（不出现在命令行与日志里）；生效需要再部署一次。
+cmd_set_smtp_password() {
+  [ -f "${secrets}" ] || die "还没部署过（缺少 ${secrets}）"
+  local pw
+  IFS= read -r pw || true
+  [ -n "${pw}" ] || die "没有读到密码"
+  case "${pw}" in *'"'* | *'\'* | *'$'* | *'`'*) die "密码里不能有 \" \\ \$ \` 字符" ;; esac
+  PW="${pw}" python3 -I - "${secrets}" <<'EOF'
+import os, sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").read().splitlines()
+out, done = [], False
+for l in lines:
+    if l.startswith("SMTP_PASSWORD="):
+        out.append('SMTP_PASSWORD="%s"' % os.environ["PW"]); done = True
+    else:
+        out.append(l)
+if not done:
+    out.append('SMTP_PASSWORD="%s"' % os.environ["PW"])
+open(p, "w", encoding="utf-8").write("\n".join(out) + "\n")
+EOF
+  chmod 0600 "${secrets}"
+  echo "已写入 ${secrets} 的 SMTP_PASSWORD"
+}
+
+cmd_mail_test() {
+  [ $# -ge 1 ] || die "用法：server.sh mail-test <收件人邮箱>"
+  control_cli mail-test -config /etc/isp-control/isp-control.yaml -to "$1"
+}
+
 [ "$(id -u)" = "0" ] || die "需要 root"
 case "${1:-install}" in
   install) cmd_install ;;
   status) cmd_status ;;
   backup) cmd_backup ;;
   mail) shift; cmd_mail "$@" ;;
-  *) die "未知命令 $1（install | status | backup | mail [N]）" ;;
+  mail-test) shift; cmd_mail_test "$@" ;;
+  set-smtp-password) cmd_set_smtp_password ;;
+  *) die "未知命令 $1（install | status | backup | mail [N] | mail-test <邮箱> | set-smtp-password）" ;;
 esac
