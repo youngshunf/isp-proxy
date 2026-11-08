@@ -837,6 +837,27 @@ func (s *Service) CreateRules(ctx context.Context, adminID string, in RulesInput
 	return v, err
 }
 
+// WithdrawRules 撤回尚未生效的规则版本（docs/06 §11）。已生效的版本只能被更新的版本取代，不能撤回。
+func (s *Service) WithdrawRules(ctx context.Context, adminID, version string) error {
+	return s.env.InTx(ctx, func(tx *kernel.Tx) error {
+		var from time.Time
+		err := tx.QueryRow(ctx, `SELECT effective_from FROM rules WHERE version = $1 FOR UPDATE`, version).Scan(&from)
+		if kernel.IsNoRows(err) {
+			return httpx.NotFound("规则版本不存在")
+		}
+		if err != nil {
+			return err
+		}
+		if !from.After(tx.Now()) {
+			return httpx.Conflict("这个版本已经生效，不能撤回；如需调整请发布新版本")
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM rules WHERE version = $1`, version); err != nil {
+			return err
+		}
+		return tx.Audit(ctx, adminID, "rules.withdraw", "rules:"+version, map[string]any{"effectiveFrom": from})
+	})
+}
+
 // Routes 返回目录相关路由（用户端目录 + 管理端套餐、流量包、规则）。
 func (s *Service) Routes() []httpx.Route {
 	type createPlan struct {
@@ -950,6 +971,9 @@ func (s *Service) Routes() []httpx.Route {
 			}
 			v, err := s.CreateRules(r.Context(), a.AdminID, in)
 			return 201, v, err
+		})},
+		{Method: "DELETE", Pattern: "/admin-api/rules/{version}", Auth: httpx.Admin, Handler: ah(func(r *http.Request, a ap) (int, any, error) {
+			return 204, nil, s.WithdrawRules(r.Context(), a.AdminID, r.PathValue("version"))
 		})},
 	}
 }

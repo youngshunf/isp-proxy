@@ -53,6 +53,7 @@ export const ADMIN_ROUTES = {
   adminSetTrafficPackStatus: ['POST', '/admin-api/traffic-packs/{trafficPackId}/status'],
   adminListRules: ['GET', '/admin-api/rules'],
   adminCreateRules: ['POST', '/admin-api/rules'],
+  adminWithdrawRules: ['DELETE', '/admin-api/rules/{version}'],
   adminListUsers: ['GET', '/admin-api/users'],
   adminCreateUser: ['POST', '/admin-api/users'],
   adminGetUser: ['GET', '/admin-api/users/{userId}'],

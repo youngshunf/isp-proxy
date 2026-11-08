@@ -2,9 +2,9 @@
 // 规则只追加新版本、不改旧版本；订单记录下单时的规则版本。收款说明未配置时用户端拒绝下单。
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, DatePicker, Input, InputNumber, Select, Table } from 'antd'
+import { App, Button, DatePicker, Input, InputNumber, Radio, Select, Table } from 'antd'
 import dayjs from 'dayjs'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { RulesInput, RulesVersion } from '@isp/api-client/admin'
 import { Plate, fmtDateTime } from '@isp/ui'
 import { qk, useApi, useServerNow } from '../app/api'
@@ -12,6 +12,15 @@ import { Callout, Facts, LoadError, Loading, Mono, PageHead, State } from '../co
 import { ConfirmAction } from '../components/ConfirmAction'
 
 const paid = (r: RulesInput) => r.payment.account.trim().length > 0
+
+/** 距生效还有多久（向上取整到分钟）。 */
+function untilText(ms: number): string {
+  const min = Math.max(1, Math.ceil(ms / 60_000))
+  if (min < 60) return `${min} 分钟后`
+  const h = Math.floor(min / 60)
+  if (h < 48) return `${h} 小时${min % 60 ? ` ${min % 60} 分钟` : ''}后`
+  return `${Math.floor(h / 24)} 天后`
+}
 
 const FIELD_LABEL: Partial<Record<keyof RulesInput, string>> = {
   periodDays: '周期',
@@ -33,15 +42,27 @@ export default function RulesPage() {
   const now = useServerNow()
   const q = useQuery({ queryKey: qk.rules, queryFn: () => api.adminListRules() })
   const [creating, setCreating] = useState(false)
+  const [withdrawing, setWithdrawing] = useState<RulesVersion | null>(null)
+  const [, tick] = useState(0)
+  // 有待生效版本时，到点（以及每分钟，刷新倒计时）重新渲染，让“当前生效”自动切换。
+  const nextAt = (q.data ?? []).map((r) => Date.parse(r.effectiveFrom)).filter((t) => t > now()).sort((a, b) => a - b)[0]
+  useEffect(() => {
+    if (nextAt === undefined) return
+    const id = window.setTimeout(() => tick((n) => n + 1), Math.min(Math.max(nextAt - now() + 500, 1000), 60_000))
+    return () => window.clearTimeout(id)
+  })
   if (q.isPending) return <Loading rows={6} />
   if (q.isError) return <LoadError error={q.error} retry={() => void q.refetch()} />
   const rules = q.data
-  const current = rules.find((r) => Date.parse(r.effectiveFrom) <= now())
+  const t = now()
+  const current = rules.find((r) => Date.parse(r.effectiveFrom) <= t)
+  const pending = rules.filter((r) => Date.parse(r.effectiveFrom) > t)
+  const nextPending = pending[pending.length - 1]
   return (
     <>
       <PageHead
         title="规则"
-        sub="规则只能发布新版本，不能修改历史版本；每笔订单记录下单时生效的版本。"
+        sub="规则只能发布新版本，不能修改已生效的版本；还没生效的版本可以撤回。每笔订单记录下单时生效的版本。"
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
             发布新版本
@@ -50,7 +71,22 @@ export default function RulesPage() {
       />
       <div className="stack">
         {current && !paid(current) && (
-          <Callout tone="stop">当前生效的 {current.version} 没有配置收款说明：用户端下单会被拒绝。请发布带收款说明的新版本。</Callout>
+          <Callout tone="stop">
+            当前生效的 {current.version} 没有配置收款说明：用户端下单会被拒绝。
+            {nextPending && paid(nextPending)
+              ? `已配置收款说明的 ${nextPending.version} 将于 ${fmtDateTime(nextPending.effectiveFrom)}（${untilText(Date.parse(nextPending.effectiveFrom) - t)}）生效。`
+              : '请发布带收款说明的新版本。'}
+          </Callout>
+        )}
+        {pending.length > 0 && (
+          <Callout tone="warn">
+            {pending
+              .slice()
+              .reverse()
+              .map((r) => `${r.version} 将于 ${fmtDateTime(r.effectiveFrom)}（${untilText(Date.parse(r.effectiveFrom) - t)}）生效`)
+              .join('；')}
+            ；在此之前新订单仍按 {current?.version ?? '原规则'} 执行。生效前可以在版本历史里撤回。
+          </Callout>
         )}
         {current && (
           <Plate title={`当前生效：${current.version}`} extra={<span className="muted small">自 {fmtDateTime(current.effectiveFrom)}</span>}>
@@ -77,6 +113,7 @@ export default function RulesPage() {
                   <span className="cell-stack">
                     <Mono>{v}</Mono>
                     {r === current && <span className="state tone-ok small">当前生效</span>}
+                    {pending.includes(r) && <span className="state tone-warn small">待生效 · {untilText(Date.parse(r.effectiveFrom) - t)}</span>}
                   </span>
                 ),
               },
@@ -90,11 +127,21 @@ export default function RulesPage() {
                 render: (_, r) => (paid(r) ? <State view={{ label: '已配置', tone: 'ok', shape: 'filled' }} strong={false} /> : <State view={{ label: '未配置（拒绝下单）', tone: 'stop', shape: 'hollow' }} strong={false} />),
               },
               { title: '发布人', render: (_, r) => r.createdBy?.email ?? '系统' },
+              {
+                title: '操作',
+                render: (_, r) =>
+                  pending.includes(r) ? (
+                    <Button size="small" danger onClick={() => setWithdrawing(r)}>
+                      撤回
+                    </Button>
+                  ) : null,
+              },
             ]}
           />
         </Plate>
       </div>
       {creating && <NewRulesDialog base={rules[0]!} onClose={() => setCreating(false)} />}
+      {withdrawing && <WithdrawDialog r={withdrawing} current={current} onClose={() => setWithdrawing(null)} />}
     </>
   )
 }
@@ -131,6 +178,30 @@ function nextVersion(prev: string, now: number): string {
   return `${day}.${n + 1}`
 }
 
+function WithdrawDialog({ r, current, onClose }: { r: RulesVersion; current?: RulesVersion; onClose: () => void }) {
+  const api = useApi()
+  const qc = useQueryClient()
+  const { message } = App.useApp()
+  return (
+    <ConfirmAction
+      open
+      onClose={onClose}
+      tone="warn"
+      title={`撤回规则 ${r.version}`}
+      okText="撤回"
+      impacts={[
+        `这一版原定 ${fmtDateTime(r.effectiveFrom)} 生效，撤回后删除、不再生效。`,
+        `新订单继续按 ${current?.version ?? '当前版本'} 执行；需要调整就重新发布一版。`,
+      ]}
+      onConfirm={() => api.adminWithdrawRules({ version: r.version })}
+      onDone={() => {
+        message.success('已撤回')
+        void qc.invalidateQueries({ queryKey: qk.rules })
+      }}
+    />
+  )
+}
+
 function NewRulesDialog({ base, onClose }: { base: RulesVersion; onClose: () => void }) {
   const api = useApi()
   const qc = useQueryClient()
@@ -139,7 +210,9 @@ function NewRulesDialog({ base, onClose }: { base: RulesVersion; onClose: () => 
   const { createdAt: _c, createdBy: _b, ...rest } = base
   void _c
   void _b
-  const [r, setR] = useState<RulesInput>({ ...rest, version: nextVersion(base.version, now()), effectiveFrom: new Date(now() + 10 * 60_000).toISOString() })
+  const [r, setR] = useState<RulesInput>({ ...rest, version: nextVersion(base.version, now()), effectiveFrom: new Date(now() + 60 * 60_000).toISOString() })
+  // 默认立即生效：提交时取当前时刻；选“定时生效”才用下面的时间。
+  const [scheduled, setScheduled] = useState(false)
   const [lines, setLines] = useState(base.snapshotLines.join('\n'))
   const set = <K extends keyof RulesInput>(k: K, v: RulesInput[K]) => setR((o) => ({ ...o, [k]: v }))
   const setPay = (k: keyof RulesInput['payment'], v: string) => setR((o) => ({ ...o, payment: { ...o.payment, [k]: v } }))
@@ -155,6 +228,7 @@ function NewRulesDialog({ base, onClose }: { base: RulesVersion; onClose: () => 
     .filter((k) => k !== 'version' && k !== 'effectiveFrom' && k !== 'snapshotLines' && JSON.stringify(rest[k]) !== JSON.stringify(r[k]))
     .map((k) => FIELD_LABEL[k] ?? k)
   const body: RulesInput = { ...r, snapshotLines: lines.split('\n').map((l) => l.trim()).filter(Boolean) }
+  const future = Date.parse(r.effectiveFrom) > now()
   return (
     <ConfirmAction
       open
@@ -162,13 +236,15 @@ function NewRulesDialog({ base, onClose }: { base: RulesVersion; onClose: () => 
       tone="warn"
       title={`发布规则 ${r.version}`}
       okText="发布"
-      ready={/^R-\d{4}-\d{2}-\d{2}(\.\d+)?$/.test(r.version) && r.monthOptions.length > 0}
+      ready={/^R-\d{4}-\d{2}-\d{2}(\.\d+)?$/.test(r.version) && r.monthOptions.length > 0 && (!scheduled || future)}
       impacts={[
-        `自 ${fmtDateTime(r.effectiveFrom)} 起，新订单使用这一版；已有订单保留下单时的版本。`,
+        scheduled
+          ? `自 ${fmtDateTime(r.effectiveFrom)} 起，新订单使用这一版；在此之前仍按现行版本执行，生效前可以撤回。已有订单保留下单时的版本。`
+          : '发布后立即生效，新订单使用这一版；已有订单保留下单时的版本。',
         changes.length ? `相对 ${base.version} 改动了 ${changes.length} 项：${changes.join('、')}` : `与 ${base.version} 内容相同（只改了快照或版本号）`,
         paid(body) ? '收款说明已配置。' : '收款说明未配置：这一版生效后用户端下单会被拒绝。',
       ]}
-      onConfirm={() => api.adminCreateRules({ body })}
+      onConfirm={() => api.adminCreateRules({ body: scheduled ? body : { ...body, effectiveFrom: new Date(now()).toISOString() } })}
       onDone={() => {
         message.success('已发布')
         void qc.invalidateQueries({ queryKey: qk.rules })
@@ -179,10 +255,29 @@ function NewRulesDialog({ base, onClose }: { base: RulesVersion; onClose: () => 
           <span className="field-label">版本号</span>
           <Input aria-label="版本号" className="mono" value={r.version} onChange={(e) => set('version', e.target.value)} />
         </label>
-        <label className="field">
-          <span className="field-label">生效时间</span>
-          <DatePicker aria-label="生效时间" showTime value={dayjs(r.effectiveFrom)} onChange={(d) => d && set('effectiveFrom', d.toISOString())} style={{ width: '100%' }} />
-        </label>
+        <div className="field">
+          <span className="field-label">生效</span>
+          <Radio.Group
+            aria-label="生效方式"
+            value={scheduled ? 'scheduled' : 'now'}
+            onChange={(e) => setScheduled(e.target.value === 'scheduled')}
+            options={[
+              { value: 'now', label: '立即生效' },
+              { value: 'scheduled', label: '定时生效' },
+            ]}
+          />
+          {scheduled && (
+            <DatePicker
+              aria-label="生效时间"
+              showTime
+              value={dayjs(r.effectiveFrom)}
+              onChange={(d) => d && set('effectiveFrom', d.toISOString())}
+              disabledDate={(d) => d.endOf('day').valueOf() < now()}
+              status={future ? undefined : 'error'}
+              style={{ width: '100%', marginTop: 8 }}
+            />
+          )}
+        </div>
         {num('periodDays', '周期', '天')}
         {num('retentionDays', '保留期', '天')}
         {num('portCooldownDays', '端口冷却', '天')}

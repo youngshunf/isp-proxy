@@ -1611,6 +1611,15 @@ export function createMockAdminApi(opts: MockAdminOptions = {}): MockAdminApi {
         audit('rules.create', 'rules', body.version, { paymentConfigured: Boolean(body.payment.account.trim()) })
         return r
       }),
+    adminWithdrawRules: ({ version }) =>
+      wait((): void => {
+        writer('rules.withdraw', 'rules', version)
+        const i = db.rules.findIndex((r) => r.version === version)
+        if (i < 0) fail('not_found', '规则版本不存在')
+        if (Date.parse(db.rules[i]!.effectiveFrom) <= now) fail('conflict', '这个版本已经生效，不能撤回；如需调整请发布新版本')
+        db.rules.splice(i, 1)
+        audit('rules.withdraw', 'rules', version, {})
+      }),
 
     // ---------- 用户
     adminListUsers: (input) =>

@@ -1232,7 +1232,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 规则版本（新的在前；第一条为当前生效） */
+        /** 规则版本（按生效时间新的在前；effectiveFrom 晚于当前时间的是待生效版本，当前生效的是其后第一条） */
         get: operations["adminListRules"];
         put?: never;
         /**
@@ -1241,6 +1241,26 @@ export interface paths {
          */
         post: operations["adminCreateRules"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin-api/rules/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * 撤回尚未生效的规则版本
+         * @description 只能撤回 effectiveFrom 晚于当前时间的版本；已生效的返回 409，只能发布新版本取代。审计 rules.withdraw。
+         */
+        delete: operations["adminWithdrawRules"];
         options?: never;
         head?: never;
         patch?: never;
@@ -5329,6 +5349,33 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Invalid"];
+        };
+    };
+    adminWithdrawRules: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description 与 isp_csrf Cookie 相同的值（双提交） */
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已撤回 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     adminListUsers: {

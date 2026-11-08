@@ -1562,7 +1562,7 @@ paths:
     get:
       operationId: adminListRules
       tags: [admin-catalog]
-      summary: 规则版本（新的在前；第一条为当前生效）
+      summary: 规则版本（按生效时间新的在前；effectiveFrom 晚于当前时间的是待生效版本，当前生效的是其后第一条）
       security: [{adminSession: []}]
       responses:
         '200':
@@ -1597,6 +1597,22 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/Invalid'}
+  /admin-api/rules/{version}:
+    delete:
+      operationId: adminWithdrawRules
+      tags: [admin-catalog]
+      summary: 撤回尚未生效的规则版本
+      description: 只能撤回 effectiveFrom 晚于当前时间的版本；已生效的返回 409，只能发布新版本取代。审计 rules.withdraw。
+      security: [{adminSession: []}]
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - {name: version, in: path, required: true, schema: {type: string}}
+      responses:
+        '204': {description: 已撤回}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
 
   # ==========================================================================
   # 管理端：用户
