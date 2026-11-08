@@ -165,7 +165,7 @@ func (c *trackedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
 		s.up.take(n)
-		if used := s.used.Add(uint64(n)); used >= s.entitled.Load() {
+		if used := s.used.Add(uint64(n)); used >= s.entitled.Load() && !s.unmetered.Load() {
 			c.a.kick(s)
 		}
 	}
@@ -209,7 +209,12 @@ func (c *trackedConn) Write(b []byte) (int, error) {
 }
 
 // grant 为下行严格预授权：并发下总授权不超过剩余额度。授权即计入已用量。
+// 不限流量的订阅（D-25）全额授权，仍计入已用量。
 func (s *sub) grant(n int) int {
+	if s.unmetered.Load() {
+		s.used.Add(uint64(n))
+		return n
+	}
 	for {
 		used := s.used.Load()
 		ent := s.entitled.Load()

@@ -348,6 +348,8 @@ func TestWireFormatAndValidate(t *testing.T) {
 		func(d *Desired) { d.Subscriptions[0].ExpiresAt = time.Time{} },
 		func(d *Desired) { d.Subscriptions = append(d.Subscriptions, d.Subscriptions[0]) },
 		func(d *Desired) { d.Probes[0].Kind = "x" },
+		// 直出订阅不能同时带上游出口（D-25）：两种出站方式只能有一种。
+		func(d *Desired) { d.Subscriptions[0].Direct = true },
 	}
 	for i, mut := range bad {
 		var c Desired
@@ -356,6 +358,35 @@ func TestWireFormatAndValidate(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("用例 %d 应校验失败", i)
 		}
+	}
+}
+
+// 直出与不限流量是显式的可选字段（D-25）：默认省略，旧消息解码为 false（ISP 订阅、按额度执行）；
+// 直出条目没有出口也能通过校验。
+func TestDirectUnmeteredWireFormat(t *testing.T) {
+	exp := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	isp := SubscriptionEntry{ID: "sub_1", Version: 1, ExpiresAt: exp, Enabled: true,
+		Access: &Access{Version: 1, Username: "u1", Password: "p", Ports: Ports{HTTP: 20000, HTTPS: 20001, SOCKS5: 20002}}}
+	b, _ := json.Marshal(isp)
+	if strings.Contains(string(b), `"direct"`) || strings.Contains(string(b), `"unmetered"`) {
+		t.Fatalf("ISP 条目不应带直出字段: %s", b)
+	}
+	direct := isp
+	direct.ID, direct.Direct, direct.Unmetered = "sub_2", true, true
+	direct.Access = &Access{Version: 1, Username: "u2", Password: "p", Ports: Ports{HTTP: 20003, HTTPS: 20004, SOCKS5: 20005}}
+	d := Desired{Revision: 1, NodeID: nodeA, Subscriptions: []SubscriptionEntry{isp, direct}}
+	if err := d.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = json.Marshal(direct)
+	for _, key := range []string{`"direct":true`, `"unmetered":true`, `"exit":null`} {
+		if !strings.Contains(string(b), key) {
+			t.Errorf("JSON 缺少 %s: %s", key, b)
+		}
+	}
+	var old SubscriptionEntry
+	if err := json.Unmarshal([]byte(`{"id":"sub_3","version":1,"exit":null}`), &old); err != nil || old.Direct || old.Unmetered {
+		t.Fatalf("旧消息应解码为非直出、按额度执行: %v %+v", err, old)
 	}
 }
 
