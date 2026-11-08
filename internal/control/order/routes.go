@@ -11,14 +11,16 @@ import (
 
 // CreateSubscriptionInput 是 OpenAPI AdminCreateSubscriptionInput。
 type CreateSubscriptionInput struct {
-	UserID        string       `json:"userId"`
-	PlanID        string       `json:"planId"`
-	PlanVersionID string       `json:"planVersionId"`
-	Months        int          `json:"months"`
-	Name          string       `json:"name"`
-	NodeID        string       `json:"nodeId"`
-	ResourceID    string       `json:"resourceId"`
-	Payment       PaymentInput `json:"payment"`
+	UserID        string `json:"userId"`
+	PlanID        string `json:"planId"`
+	PlanVersionID string `json:"planVersionId"`
+	Months        int    `json:"months"`
+	Name          string `json:"name"`
+	NodeID        string `json:"nodeId"`
+	ResourceID    string `json:"resourceId"`
+	// City 是可选城市（D-27），规则同自助下单；指定 resourceId 时以该资源为准。
+	City    *string      `json:"city"`
+	Payment PaymentInput `json:"payment"`
 }
 
 // CreateSubscriptionResult 是 OpenAPI AdminCreateSubscriptionResult。
@@ -39,7 +41,7 @@ func (s *Service) CreateSubscription(r *http.Request, tx *kernel.Tx, adminID str
 			return nil, httpx.Invalid("名称需为 1～24 个字符")
 		}
 	}
-	id, err := s.Create(ctx, tx, in.UserID, Input{Kind: "new", PlanID: in.PlanID, PlanVersionID: in.PlanVersionID, Months: in.Months, Quantity: 1},
+	id, err := s.Create(ctx, tx, in.UserID, Input{Kind: "new", PlanID: in.PlanID, PlanVersionID: in.PlanVersionID, Months: in.Months, Quantity: 1, City: in.City},
 		createOpts{AdminID: adminID, Gift: in.Payment.Method == "admin_gift", Name: in.Name, SkipStock: true})
 	if err != nil {
 		return nil, err

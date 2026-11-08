@@ -43,7 +43,7 @@ const baseSQL = `SELECT s.id AS id, s.user_id AS user_id, u.email AS email, u.st
 	s.lifecycle AS lifecycle, s.lifecycle_reason AS lifecycle_reason, s.node_id AS node_id, n.status AS node_status,
 	n.public_host AS node_host, n.direct_country_code AS node_dcc, n.direct_region AS node_dregion, s.kind AS kind, COALESCE(s.plan_id, '') AS plan_id,
 	COALESCE(s.plan_version_id, '') AS plan_version_id, COALESCE(pv.version, 0) AS plan_version, COALESCE(pv.name, '') AS plan_name,
-	COALESCE(pv.country_code, '') AS cc, COALESCE(pv.country_name, '') AS country, COALESCE(pv.city, '') AS city,
+	COALESCE(pv.country_code, '') AS cc, COALESCE(pv.country_name, '') AS country, COALESCE(s.city, pv.city) AS city,
 	COALESCE(pv.concurrency, s.direct_max_conns) AS concurrency, COALESCE(pv.bandwidth_mbps, s.direct_bandwidth_mbps) AS bandwidth,
 	CASE WHEN s.kind = 'direct' THEN (` + kernel.PaidUntilSQL + ` AND p.expires_at > $1) END AS paid_until, s.admin_paused AS admin_paused, s.paused_reason AS paused_reason,
 	s.entitled_bytes_total AS entitled_bytes, s.used_bytes_total AS used_bytes, s.entitled_seconds_total AS entitled_secs,
@@ -72,7 +72,8 @@ type row struct {
 	NodeDCC, NodeDRegion                               *string
 	Kind, PlanID, PlanVersionID                        string
 	PlanVersion                                        int
-	PlanName, CC, Country, City                        string
+	PlanName, CC, Country                              string
+	City                                               *string // 有效城市（D-27）：订阅保存的城市，存量回落到套餐版本；nil 为不限城市
 	Concurrency, Bandwidth                             int
 	PaidUntil                                          *time.Time
 	AdminPaused                                        bool
@@ -127,12 +128,13 @@ func loadRow(ctx context.Context, q kernel.Q, now time.Time, id, userID string) 
 
 // Plan 是 OpenAPI SubscriptionPlan。
 type Plan struct {
-	Name          string `json:"name"`
-	CountryCode   string `json:"countryCode"`
-	Country       string `json:"country"`
-	City          string `json:"city"`
-	Concurrency   int    `json:"concurrency"`
-	BandwidthMbps int    `json:"bandwidthMbps"`
+	Name        string `json:"name"`
+	CountryCode string `json:"countryCode"`
+	Country     string `json:"country"`
+	// City 是购买时的有效城市（套餐固定的或用户选择的）；null 表示不限城市（D-27）。
+	City          *string `json:"city"`
+	Concurrency   int     `json:"concurrency"`
+	BandwidthMbps int     `json:"bandwidthMbps"`
 	// ExitMode 是购买时的出口类型：exclusive 独享 / shared 共享（D-24，订单快照）。
 	ExitMode string `json:"exitMode"`
 }
@@ -154,14 +156,15 @@ type Traffic struct {
 
 // Exit 是 OpenAPI Exit（客户可见，不含供应商）。
 type Exit struct {
-	Version     int       `json:"version"`
-	IP          string    `json:"ip"`
-	CountryCode string    `json:"countryCode"`
-	Country     string    `json:"country"`
-	City        string    `json:"city"`
-	Check       string    `json:"check"`
-	LatencyMs   *int      `json:"latencyMs"`
-	CheckedAt   time.Time `json:"checkedAt"`
+	Version     int    `json:"version"`
+	IP          string `json:"ip"`
+	CountryCode string `json:"countryCode"`
+	Country     string `json:"country"`
+	// City 取检测到的城市，没有时取资源声明的城市；都没有为 null（D-27）。
+	City      *string   `json:"city"`
+	Check     string    `json:"check"`
+	LatencyMs *int      `json:"latencyMs"`
+	CheckedAt time.Time `json:"checkedAt"`
 	// SharedCapacity 是共享出口的“最多 N 人共用”（所分配资源的绑定上限）；独享为 null。
 	// 不给当前人数，也不给同出口其他订阅的任何信息（docs/06 §9.1）。
 	SharedCapacity *int `json:"sharedCapacity"`
@@ -303,7 +306,8 @@ type exitRow struct {
 	CheckedAt, BoundAt, UnboundAt                   *time.Time
 	UnboundReason, TaskID                           *string
 	CreatedAt                                       time.Time
-	ResCC, ResCountry, ResCity                      string
+	ResCC, ResCountry                               string
+	ResCity                                         *string
 	ResLastIP                                       *string
 	ExitMode                                        string
 	MaxTenants                                      int
@@ -368,6 +372,14 @@ func (e *exitRow) check(now time.Time, interval time.Duration) string {
 	return *e.CheckResult
 }
 
+// city 是出口城市：检测到的城市优先，否则取资源声明的城市（可能为空，D-27）。
+func (e *exitRow) city() *string {
+	if e.CheckCity != nil && *e.CheckCity != "" {
+		return e.CheckCity
+	}
+	return e.ResCity
+}
+
 func (e *exitRow) userView(now time.Time, interval time.Duration) *Exit {
 	checked := e.CreatedAt
 	if e.CheckedAt != nil {
@@ -376,7 +388,7 @@ func (e *exitRow) userView(now time.Time, interval time.Duration) *Exit {
 		checked = *e.BoundAt
 	}
 	v := &Exit{Version: e.Version, IP: kernel.StrOr(e.ip(), ""), CountryCode: *e.cc(), Country: e.ResCountry,
-		City: kernel.StrOr(e.CheckCity, e.ResCity), Check: e.check(now, interval), LatencyMs: e.Latency, CheckedAt: checked.UTC()}
+		City: e.city(), Check: e.check(now, interval), LatencyMs: e.Latency, CheckedAt: checked.UTC()}
 	if e.ExitMode == "shared" {
 		v.SharedCapacity = kernel.Ptr(e.MaxTenants)
 	}
@@ -445,7 +457,7 @@ type AdminExit struct {
 	IP               *string    `json:"ip"`
 	CountryCode      *string    `json:"countryCode"`
 	Country          string     `json:"country"`
-	City             string     `json:"city"`
+	City             *string    `json:"city"`
 	Check            *string    `json:"check"`
 	LatencyMs        *int       `json:"latencyMs"`
 	CheckedAt        *time.Time `json:"checkedAt"`
@@ -511,7 +523,7 @@ type AdminDetail struct {
 func (e *exitRow) adminView(now time.Time, interval time.Duration) *AdminExit {
 	v := &AdminExit{BindingID: e.ID, Version: e.Version, ResourceID: e.ResourceID, Provider: e.Provider, UpstreamProtocol: e.Protocol,
 		UpstreamAddr: net.JoinHostPort(e.Host, strconv.Itoa(e.Port)), VerifiedIP: e.VerifiedIP, IP: e.CheckIP, CountryCode: e.cc(),
-		Country: e.ResCountry, City: kernel.StrOr(e.CheckCity, e.ResCity), LatencyMs: e.Latency, CheckedAt: kernel.TimePtr(e.CheckedAt),
+		Country: e.ResCountry, City: e.city(), LatencyMs: e.Latency, CheckedAt: kernel.TimePtr(e.CheckedAt),
 		CheckError: e.CheckError, BoundAt: kernel.TimePtr(e.BoundAt), ExitMode: e.ExitMode, MaxTenants: e.MaxTenants}
 	if e.CheckResult != nil {
 		v.Check = kernel.Ptr(e.check(now, interval))

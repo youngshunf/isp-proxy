@@ -47,6 +47,8 @@ type Input struct {
 	SubscriptionID string `json:"subscriptionId,omitempty"`
 	PackID         string `json:"packId,omitempty"`
 	PackVersionID  string `json:"packVersionId,omitempty"`
+	// City 是新购时用户选择的城市（D-27）：套餐固定城市时只能缺省或与之相同；不限城市的套餐在该城市内预留。
+	City *string `json:"city,omitempty"`
 }
 
 type line struct {
@@ -91,7 +93,8 @@ func (s *Service) Create(ctx context.Context, tx *kernel.Tx, userID string, in I
 	var lines []line
 	var subID, planID, planVersionID *string
 	var months *int
-	var country, city string
+	var country string
+	var city *string     // 新购订单的有效城市（D-27）：套餐固定城市 > 用户选择 > 不限（nil）
 	var exitMode *string // 新购订单快照套餐的出口类型（D-24）
 	switch in.Kind {
 	case "new":
@@ -121,15 +124,31 @@ func (s *Service) Create(ctx context.Context, tx *kernel.Tx, userID string, in I
 				return "", httpx.Conflict(fmt.Sprintf("最多同时保留 %d 个未付款的新购订单，请先付款或取消已有订单", rules.MaxUnpaidNewOrders))
 			}
 		}
+		chosen := kernel.NormCity(in.City)
+		if err := kernel.CheckCity(chosen); err != nil {
+			return "", err
+		}
+		switch {
+		case pv.City == nil:
+			city = chosen
+		case chosen != nil && *chosen != *pv.City:
+			return "", httpx.Invalid("该套餐的城市固定为" + *pv.City + "，不能选择其他城市")
+		default:
+			city = pv.City
+		}
 		amount := pv.Price.Amount * int64(in.Months)
 		if o.Gift {
 			amount = 0
 		}
+		detail := fmt.Sprintf("%d 个月（%d 天），含流量 %s", in.Months, in.Months*pv.PeriodDays, kernel.FormatBytes(pv.IncludedBytes*int64(in.Months)))
+		if pv.City == nil && city != nil {
+			detail += "，城市：" + *city
+		}
 		lines = append(lines, line{Kind: "plan", PlanVersionID: &pv.ID, Label: pv.Name,
-			Detail: fmt.Sprintf("%d 个月（%d 天），含流量 %s", in.Months, in.Months*pv.PeriodDays, kernel.FormatBytes(pv.IncludedBytes*int64(in.Months))),
+			Detail: detail,
 			Amount: kernel.CNY(amount), Seconds: int64(in.Months*pv.PeriodDays) * 86400, Bytes: pv.IncludedBytes * int64(in.Months)})
 		planID, planVersionID, months = &pv.PlanID, &pv.ID, &in.Months
-		country, city = pv.CountryCode, pv.City
+		country = pv.CountryCode
 		mode, err := catalog.PlanExitMode(ctx, tx, pv.PlanID)
 		if err != nil {
 			return "", err
@@ -210,9 +229,9 @@ func (s *Service) Create(ctx context.Context, tx *kernel.Tx, userID string, in I
 		admin = &o.AdminID
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO orders (id, user_id, kind, subscription_id, plan_id, plan_version_id, months, amount_cents,
-	                            payment_method, rules_version, rules_snapshot, hold_until, created_by_admin, created_at, exit_mode)
-	                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-		id, userID, in.Kind, subID, planID, planVersionID, months, total, method, rules.Version, snapshot, hold, admin, now, exitMode); err != nil {
+	                            payment_method, rules_version, rules_snapshot, hold_until, created_by_admin, created_at, exit_mode, city)
+	                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		id, userID, in.Kind, subID, planID, planVersionID, months, total, method, rules.Version, snapshot, hold, admin, now, exitMode, city); err != nil {
 		return "", err
 	}
 	for i, l := range lines {
@@ -366,17 +385,19 @@ func (s *Service) credit(ctx context.Context, tx *kernel.Tx, o *ord, adminID str
 	var lifecycle string
 	if o.Kind == "new" {
 		var name, planID, rulesVersion, exitMode string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(NULLIF(o.rules_snapshot->>'name', ''), pv.name), o.plan_id, o.rules_version, o.exit_mode
+		var city *string // 新购订单的有效城市（D-27）；存量订单为空，履约回落到套餐版本的城市
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(NULLIF(o.rules_snapshot->>'name', ''), pv.name), o.plan_id, o.rules_version, o.exit_mode,
+		                                   o.city
 		                             FROM orders o JOIN plan_versions pv ON pv.id = o.plan_version_id WHERE o.id = $1`, o.ID).
-			Scan(&name, &planID, &rulesVersion, &exitMode); err != nil {
+			Scan(&name, &planID, &rulesVersion, &exitMode, &city); err != nil {
 			return "", err
 		}
 		name, _ = kernel.TrimName(kernel.TruncateRunes(name, 24))
 		subID = store.NewID("sub")
 		if _, err := tx.Exec(ctx, `INSERT INTO subscriptions (id, user_id, plan_id, plan_version_id, rules_version, created_from_order_id, name,
-		                              created_at, exit_mode)
-		                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			subID, o.UserID, planID, *o.PlanVersionID, rulesVersion, o.ID, name, now, exitMode); err != nil {
+		                              created_at, exit_mode, city)
+		                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			subID, o.UserID, planID, *o.PlanVersionID, rulesVersion, o.ID, name, now, exitMode, city); err != nil {
 			return "", err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE orders SET subscription_id = $2 WHERE id = $1`, o.ID, subID); err != nil {

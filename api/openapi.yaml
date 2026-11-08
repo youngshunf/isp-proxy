@@ -2581,7 +2581,7 @@ components:
         ip: {type: string, description: 实际出口 IP（检测结果）}
         countryCode: {$ref: '#/components/schemas/CountryCode'}
         country: {type: string}
-        city: {type: string}
+        city: {type: [string, 'null'], description: 检测到的城市，没有时取资源声明的城市；都没有为 null（D-27）}
         check: {$ref: '#/components/schemas/ExitCheck'}
         latencyMs: {type: [integer, 'null']}
         checkedAt: {type: string, format: date-time}
@@ -2612,7 +2612,7 @@ components:
         name: {type: string}
         countryCode: {$ref: '#/components/schemas/CountryCode'}
         country: {type: string}
-        city: {type: string}
+        city: {type: [string, 'null'], description: 购买时的有效城市（套餐固定的或用户选择的）；null 表示不限城市（D-27）}
         concurrency: {type: integer}
         bandwidthMbps: {type: integer}
     SubscriptionTime:
@@ -2739,18 +2739,32 @@ components:
       description: 出口类型：exclusive 独享（独占一个上游资源）；shared 共享（与其他共享订阅共用一个资源，人数不超过资源的绑定上限，D-24）
     Plan:
       type: object
-      required: [id, versionId, countryCode, country, city, monthlyPrice, includedBytes, concurrency, bandwidthMbps, exitMode, stock]
+      required: [id, versionId, name, countryCode, country, city, cities, monthlyPrice, includedBytes, concurrency, bandwidthMbps,
+                 exitMode, stock]
       properties:
         id: {type: string}
         versionId: {type: string, description: 当前价格版本，下单时可回传用于校验}
+        name: {type: string, description: 当前版本的套餐名称（D-27）}
         exitMode: {$ref: '#/components/schemas/ExitMode'}
         countryCode: {$ref: '#/components/schemas/CountryCode'}
         country: {type: string}
-        city: {type: string}
+        city: {type: [string, 'null'], description: 套餐固定的城市；null 表示不限城市，下单时可在 cities 中选（D-27）}
+        cities:
+          type: array
+          description: |
+            不限城市的套餐：该国家、该出口类型下当前有货的城市（按名称排序，只含有城市的资源）；固定城市的套餐为空数组。
+            不选城市时 stock 按整个国家计（含没有城市的资源）。
+          items: {$ref: '#/components/schemas/PlanCity'}
         monthlyPrice: {$ref: '#/components/schemas/Money'}
         includedBytes: {type: integer, format: int64, description: 每个月包含的流量}
         concurrency: {type: integer}
         bandwidthMbps: {type: integer}
+        stock: {$ref: '#/components/schemas/StockLevel'}
+    PlanCity:
+      type: object
+      required: [name, stock]
+      properties:
+        name: {type: string}
         stock: {$ref: '#/components/schemas/StockLevel'}
     TrafficPack:
       type: object
@@ -2857,6 +2871,11 @@ components:
         planVersionId: {type: string, description: 可选；与当前版本不符时 409（价格已变化）}
         months: {type: integer, minimum: 1, description: 必须是 catalog.monthOptions 之一}
         quantity: {type: integer, minimum: 1, maximum: 1, description: 一次订单一个订阅（D-13），只能为 1}
+        city:
+          type: string
+          description: |
+            可选城市（D-27）。套餐固定城市时只能缺省或与之相同，否则 422；不限城市的套餐在该城市内预留，该城市无货 409。
+            缺省或空串表示不限城市（系统在该国家内分配）。
     OrderInputRenewTime:
       type: object
       required: [kind, subscriptionId, months]
@@ -3061,7 +3080,7 @@ components:
         ip: {type: [string, 'null'], description: 最近一次检测的出口}
         countryCode: {anyOf: [{$ref: '#/components/schemas/CountryCode'}, {type: 'null'}]}
         country: {type: string}
-        city: {type: string}
+        city: {type: [string, 'null'], description: 检测到的城市，没有时取资源声明的城市；都没有为 null}
         check: {anyOf: [{$ref: '#/components/schemas/ExitCheck'}, {type: 'null'}]}
         latencyMs: {type: [integer, 'null']}
         checkedAt: {type: [string, 'null'], format: date-time}
@@ -3204,6 +3223,7 @@ components:
         name: {type: string, minLength: 1, maxLength: 24}
         nodeId: {type: string}
         resourceId: {type: string, description: 指定可售资源；不指定则按套餐地域分配}
+        city: {type: [string, 'null'], description: 可选城市，规则同自助下单 OrderInputNew.city（D-27）}
         payment: {$ref: '#/components/schemas/ConfirmPaymentInput'}
     AdminCreateSubscriptionResult:
       type: object
@@ -3482,7 +3502,7 @@ components:
         hasPassword: {type: boolean, description: 密码加密保存，任何接口都不返回明文}
         countryCode: {$ref: '#/components/schemas/CountryCode'}
         country: {type: string}
-        city: {type: string}
+        city: {type: [string, 'null'], description: 供应商声明的城市；未填为 null（D-27）}
         provider: {type: string}
         note: {type: string}
         status: {$ref: '#/components/schemas/UpstreamStatus'}
@@ -3545,7 +3565,7 @@ components:
         error: {type: [string, 'null']}
     UpstreamInput:
       type: object
-      required: [nodeId, countryCode, country, city]
+      required: [nodeId, countryCode, country]
       properties:
         url: {type: string, description: 'socks5://user:pass@host:port 等，凭据可 URL 编码'}
         protocol: {type: string, enum: [http, https, socks5]}
@@ -3556,7 +3576,7 @@ components:
         nodeId: {type: string}
         countryCode: {$ref: '#/components/schemas/CountryCode'}
         country: {type: string}
-        city: {type: string}
+        city: {type: [string, 'null'], maxLength: 64, description: 可选；缺省、null 或空串表示不填（D-27）}
         provider: {type: string}
         note: {type: string}
         maxTenants: {type: integer, minimum: 1, maximum: 100, description: 绑定上限；不填取配置 core.shared_exit_default_capacity（默认 3）}
@@ -3572,7 +3592,7 @@ components:
         password: {type: string, writeOnly: true, description: 不传表示不改}
         countryCode: {$ref: '#/components/schemas/CountryCode'}
         country: {type: string}
-        city: {type: string}
+        city: {type: [string, 'null'], maxLength: 64, description: 缺省不改；null 或空串清除（D-27）}
         provider: {type: string}
         note: {type: string}
         maxTenants: {type: integer, minimum: 1, maximum: 100, description: 不能低于当前共享占用；有共享占用时不能改为 1}
@@ -3610,7 +3630,7 @@ components:
         name: {type: string}
         countryCode: {$ref: '#/components/schemas/CountryCode'}
         country: {type: string}
-        city: {type: string}
+        city: {type: [string, 'null'], description: null 表示不限城市（D-27）}
         price: {$ref: '#/components/schemas/Money'}
         periodDays: {type: integer}
         includedBytes: {type: integer, format: int64}
@@ -3623,12 +3643,12 @@ components:
             - {type: 'null'}
     PlanVersionInput:
       type: object
-      required: [name, countryCode, country, city, price, periodDays, includedBytes, concurrency, bandwidthMbps]
+      required: [name, countryCode, country, price, periodDays, includedBytes, concurrency, bandwidthMbps]
       properties:
         name: {type: string, minLength: 1, maxLength: 64}
         countryCode: {$ref: '#/components/schemas/CountryCode'}
         country: {type: string}
-        city: {type: string}
+        city: {type: [string, 'null'], maxLength: 64, description: 可选；缺省、null 或空串表示不限城市（D-27）}
         price: {$ref: '#/components/schemas/Money'}
         periodDays: {type: integer, minimum: 1}
         includedBytes: {type: integer, format: int64, minimum: 0}

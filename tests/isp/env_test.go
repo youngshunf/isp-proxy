@@ -31,7 +31,7 @@ type ExitSpec struct {
 	IP       string // 回显 IP（203.0.113.x 等文档地址）
 	Geo      string // 控制面按 IP 解析出的国家；默认 us。空串表示未知
 	Country  string // 录入时声明的国家代码；默认 us
-	City     string // 默认 Los Angeles
+	City     string // 默认 Los Angeles；"-" 表示录入时不填城市（D-27）
 	Protocol string // http / https / socks5；默认按序号轮换
 	// RegisterPassword 非空时录入错误的上游密码（认证失败的候选）。
 	RegisterPassword string
@@ -196,6 +196,8 @@ func NewEnv(t *testing.T, opts EnvOptions) *Env {
 		}
 		if s.City == "" {
 			s.City = "Los Angeles"
+		} else if s.City == "-" {
+			s.City = ""
 		}
 		if s.Geo == "" {
 			s.Geo = "us"

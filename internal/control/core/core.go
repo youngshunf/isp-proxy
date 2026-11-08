@@ -218,7 +218,11 @@ func (c *Core) healthAlerts(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		type region struct{ cc, city, mode string }
+		type region struct {
+			cc   string
+			city *string // nil = 不限城市（D-27），按整个国家计
+			mode string
+		}
 		var rs []region
 		for rows.Next() {
 			var r region
@@ -237,9 +241,14 @@ func (c *Core) healthAlerts(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			key, msg := "stock_low:"+r.cc+":"+r.city, "地域 "+r.cc+"/"+r.city+" 可售资源不足"
+			// 不限城市的套餐：去重键城市段为 *，提示写“不限城市”（D-27）。
+			cityKey, cityName := "*", "不限城市"
+			if r.city != nil {
+				cityKey, cityName = *r.city, *r.city
+			}
+			key, msg := "stock_low:"+r.cc+":"+cityKey, "地域 "+r.cc+"/"+cityName+" 可售资源不足"
 			if r.mode == inventory.ModeShared {
-				key, msg = key+":shared", "地域 "+r.cc+"/"+r.city+" 共享出口剩余名额不足"
+				key, msg = key+":shared", "地域 "+r.cc+"/"+cityName+" 共享出口剩余名额不足"
 			}
 			if n < cfg.StockLowThreshold {
 				if err := alert.Raise(ctx, tx, now, alert.Alert{Kind: "stock_low", Severity: "warning", Key: key,

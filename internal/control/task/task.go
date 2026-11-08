@@ -260,8 +260,13 @@ func (s *Service) Fulfill(ctx context.Context, tx *kernel.Tx, subID string, o Fu
 	if err := ensureIdle(ctx, tx, subID); err != nil {
 		return "", err
 	}
-	var country, city string
-	if err := tx.QueryRow(ctx, `SELECT country_code, city FROM plan_versions WHERE id = $1`, sb.PlanVersionID).Scan(&country, &city); err != nil {
+	// 有效城市（D-27）：订阅保存的城市（新购订单确定），存量订阅为空时回落到套餐版本的城市；都为空表示不限城市。
+	// 释放后续费的重新履约同样在这个城市内挑选。
+	var country string
+	var city *string
+	if err := tx.QueryRow(ctx, `SELECT pv.country_code, COALESCE(s.city, pv.city)
+	                              FROM subscriptions s JOIN plan_versions pv ON pv.id = s.plan_version_id WHERE s.id = $1`, subID).
+		Scan(&country, &city); err != nil {
 		return "", err
 	}
 	var orderPtr *string

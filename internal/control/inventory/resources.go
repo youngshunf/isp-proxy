@@ -22,7 +22,7 @@ var ErrNoStock = httpx.Conflict("该地区暂时无货，请选择其他地区�
 
 // ReserveForOrder 为未付款新购订单预留库存（R-16.4）：独享预留整份资源（状态 reserved），共享预留一个名额（resource_slots）。
 // 并发下最后一份资源 / 最后一个名额只会被一个订单拿到（A-27、A-47）。无货返回 ErrNoStock。
-func ReserveForOrder(ctx context.Context, tx *kernel.Tx, mode, country, city, orderID string, until time.Time) (string, error) {
+func ReserveForOrder(ctx context.Context, tx *kernel.Tx, mode, country string, city *string, orderID string, until time.Time) (string, error) {
 	id, err := pick(ctx, tx, mode, country, city)
 	if err != nil {
 		return "", err
@@ -65,7 +65,8 @@ func ExpireStaleHolds(ctx context.Context, tx *kernel.Tx, now time.Time) error {
 }
 
 // PickForFulfill 为履约选资源：显式指定的资源 > 订单预留的资源 > 同地域按出口类型挑选（R-16.7）。资源行已锁。
-func PickForFulfill(ctx context.Context, tx *kernel.Tx, mode string, orderID *string, explicit, country, city string) (string, error) {
+// city 为 nil 表示不限城市（D-27）。
+func PickForFulfill(ctx context.Context, tx *kernel.Tx, mode string, orderID *string, explicit, country string, city *string) (string, error) {
 	if explicit != "" {
 		var status string
 		var resOrder *string
@@ -218,19 +219,20 @@ func StockLevel(available, lowThreshold int) string {
 
 // StockCounts 返回地域内按出口类型计的库存：
 // 独享为可售（无共享占用）、已预留、已占用的资源数；共享为剩余名额、订单预留名额、生效与待生效的共享绑定数（R-16.7）。
-func StockCounts(ctx context.Context, q kernel.Q, mode, country, city string) (available, reserved, bound int, err error) {
+// city 为 nil 时按整个国家计（含没有城市的资源，D-27）。
+func StockCounts(ctx context.Context, q kernel.Q, mode, country string, city *string) (available, reserved, bound int, err error) {
 	if mode == ModeShared {
 		err = q.QueryRow(ctx, `SELECT
 		        COALESCE((SELECT sum(GREATEST(0, r.max_tenants - isp_shared_occupancy(r.id)))
 		                    FROM upstream_resources r JOIN nodes n ON n.id = r.node_id
-		                   WHERE r.country_code = $1 AND r.city = $2 AND r.status = 'available' AND n.status = 'active'
+		                   WHERE `+regionSQL+` AND r.status = 'available' AND n.status = 'active'
 		                     AND r.max_tenants >= 2 AND NOT isp_exclusive_occupied(r.id)
 		                     AND NOT EXISTS (SELECT 1 FROM exit_bindings b WHERE b.verified_ip = r.last_exit_ip
 		                                      AND b.state IN ('pending', 'active') AND b.exit_mode = 'exclusive')), 0),
 		        (SELECT count(*) FROM resource_slots s JOIN upstream_resources r ON r.id = s.resource_id
-		          WHERE s.kind = 'order_hold' AND r.country_code = $1 AND r.city = $2),
+		          WHERE s.kind = 'order_hold' AND `+regionSQL+`),
 		        (SELECT count(*) FROM exit_bindings b JOIN upstream_resources r ON r.id = b.resource_id
-		          WHERE b.state IN ('pending', 'active') AND b.exit_mode = 'shared' AND r.country_code = $1 AND r.city = $2)`,
+		          WHERE b.state IN ('pending', 'active') AND b.exit_mode = 'shared' AND `+regionSQL+`)`,
 			country, city).Scan(&available, &reserved, &bound)
 		return
 	}
@@ -238,24 +240,65 @@ func StockCounts(ctx context.Context, q kernel.Q, mode, country, city string) (a
 	                              count(*) FILTER (WHERE r.status = 'reserved'),
 	                              count(*) FILTER (WHERE r.status = 'bound')
 	                         FROM upstream_resources r JOIN nodes n ON n.id = r.node_id
-	                        WHERE r.country_code = $1 AND r.city = $2`, country, city).Scan(&available, &reserved, &bound)
+	                        WHERE `+regionSQL, country, city).Scan(&available, &reserved, &bound)
 	return
+}
+
+// CityStock 是某国家某出口类型下一个城市的可售数量（独享为空闲资源数，共享为剩余名额数）。
+type CityStock struct {
+	City      string
+	Available int
+}
+
+// CityStocks 列出国家内当前有货的城市（只列有城市的资源，按城市名排序），口径与 StockCounts 的可售数一致。
+// 用于不限城市套餐让用户选城市（D-27）。
+func CityStocks(ctx context.Context, q kernel.Q, mode, country string) ([]CityStock, error) {
+	sql := `SELECT r.city, count(*) FROM upstream_resources r JOIN nodes n ON n.id = r.node_id
+	         WHERE r.country_code = $1 AND r.city IS NOT NULL AND r.status = 'available' AND n.status = 'active'
+	           AND isp_shared_occupancy(r.id) = 0
+	         GROUP BY r.city ORDER BY r.city`
+	if mode == ModeShared {
+		sql = `SELECT r.city, sum(GREATEST(0, r.max_tenants - isp_shared_occupancy(r.id)))::int AS n
+		         FROM upstream_resources r JOIN nodes n ON n.id = r.node_id
+		        WHERE r.country_code = $1 AND r.city IS NOT NULL AND r.status = 'available' AND n.status = 'active'
+		          AND r.max_tenants >= 2 AND NOT isp_exclusive_occupied(r.id)
+		          AND NOT EXISTS (SELECT 1 FROM exit_bindings b WHERE b.verified_ip = r.last_exit_ip
+		                           AND b.state IN ('pending', 'active') AND b.exit_mode = 'exclusive')
+		        GROUP BY r.city ORDER BY r.city`
+	}
+	rows, err := q.Query(ctx, sql, country)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CityStock{}
+	for rows.Next() {
+		var c CityStock
+		if err := rows.Scan(&c.City, &c.Available); err != nil {
+			return nil, err
+		}
+		if c.Available > 0 {
+			out = append(out, c)
+		}
+	}
+	return out, rows.Err()
 }
 
 // ---- 管理端视图与接口 ----
 
 // UpstreamView 是 OpenAPI Upstream（不含密码明文）。
 type UpstreamView struct {
-	ID                  string        `json:"id"`
-	NodeID              string        `json:"nodeId"`
-	Protocol            string        `json:"protocol"`
-	Host                string        `json:"host"`
-	Port                int           `json:"port"`
-	Username            string        `json:"username"`
-	HasPassword         bool          `json:"hasPassword"`
-	CountryCode         string        `json:"countryCode"`
-	Country             string        `json:"country"`
-	City                string        `json:"city"`
+	ID          string `json:"id"`
+	NodeID      string `json:"nodeId"`
+	Protocol    string `json:"protocol"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Username    string `json:"username"`
+	HasPassword bool   `json:"hasPassword"`
+	CountryCode string `json:"countryCode"`
+	Country     string `json:"country"`
+	// City 是供应商声明的城市；未填为 null（D-27）。
+	City                *string       `json:"city"`
 	Provider            string        `json:"provider"`
 	Note                string        `json:"note"`
 	Status              string        `json:"status"`
@@ -387,9 +430,10 @@ type UpstreamInput struct {
 	NodeID      string  `json:"nodeId"`
 	CountryCode string  `json:"countryCode"`
 	Country     string  `json:"country"`
-	City        string  `json:"city"`
-	Provider    string  `json:"provider"`
-	Note        string  `json:"note"`
+	// City 可选：缺省、null、空串都表示不填（D-27）。
+	City     *string `json:"city"`
+	Provider string  `json:"provider"`
+	Note     string  `json:"note"`
 	// MaxTenants 是绑定上限（≥ 1）；不填取配置 core.shared_exit_default_capacity（D-24）。
 	MaxTenants *int `json:"maxTenants"`
 }
@@ -459,8 +503,12 @@ func (s *Service) CreateUpstream(ctx context.Context, adminID string, in Upstrea
 	if !validHost(host) || port < 1 || port > 65535 {
 		return nil, httpx.Invalid("上游主机或端口不合法")
 	}
-	if !countryRe.MatchString(in.CountryCode) || strings.TrimSpace(in.Country) == "" || strings.TrimSpace(in.City) == "" {
-		return nil, httpx.Invalid("国家代码（两位小写）、国家与城市必填")
+	if !countryRe.MatchString(in.CountryCode) || strings.TrimSpace(in.Country) == "" {
+		return nil, httpx.Invalid("国家代码（两位小写）与国家必填")
+	}
+	city := kernel.NormCity(in.City)
+	if err := kernel.CheckCity(city); err != nil {
+		return nil, err
 	}
 	maxTenants := s.env.Cfg.SharedExitDefaultCapacity
 	if in.MaxTenants != nil {
@@ -486,7 +534,7 @@ func (s *Service) CreateUpstream(ctx context.Context, adminID string, in Upstrea
 		_, err := tx.Exec(ctx, `INSERT INTO upstream_resources (id, node_id, protocol, host, port, username, password_enc,
 		                          country_code, country_name, city, provider, note, max_tenants, created_by, created_at, updated_at)
 		                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)`,
-			id, in.NodeID, protocol, host, port, user, enc, in.CountryCode, strings.TrimSpace(in.Country), strings.TrimSpace(in.City),
+			id, in.NodeID, protocol, host, port, user, enc, in.CountryCode, strings.TrimSpace(in.Country), city,
 			in.Provider, in.Note, maxTenants, adminID, tx.Now())
 		if store.IsUniqueViolation(err, "") {
 			return httpx.Conflict("同一协议、主机、端口与用户名的上游已录入")
@@ -495,7 +543,7 @@ func (s *Service) CreateUpstream(ctx context.Context, adminID string, in Upstrea
 			return err
 		}
 		if err := tx.Audit(ctx, adminID, "upstream.create", "upstream:"+id, map[string]any{"protocol": protocol, "host": host,
-			"port": port, "username": user, "countryCode": in.CountryCode, "city": in.City, "maxTenants": maxTenants}); err != nil {
+			"port": port, "username": user, "countryCode": in.CountryCode, "city": city, "maxTenants": maxTenants}); err != nil {
 			return err
 		}
 		v, err = GetUpstream(ctx, tx, id)
@@ -514,10 +562,11 @@ type UpstreamPatch struct {
 	Password    *string `json:"password"`
 	CountryCode *string `json:"countryCode"`
 	Country     *string `json:"country"`
-	City        *string `json:"city"`
-	Provider    *string `json:"provider"`
-	Note        *string `json:"note"`
-	MaxTenants  *int    `json:"maxTenants"`
+	// City 缺省不改；null 或空串清除（D-27）。
+	City       kernel.OptString `json:"city"`
+	Provider   *string          `json:"provider"`
+	Note       *string          `json:"note"`
+	MaxTenants *int             `json:"maxTenants"`
 }
 
 // MaxTenantsLimit 是绑定上限的最大值（防止误填）。
@@ -585,11 +634,15 @@ func (s *Service) UpdateUpstream(ctx context.Context, adminID, id string, p Upst
 		if p.Country != nil {
 			country = *p.Country
 		}
-		if p.City != nil {
-			city = *p.City
+		if p.City.Set {
+			city = kernel.NormCity(p.City.Value)
 		}
-		if !countryRe.MatchString(cc) || country == "" || city == "" {
-			return httpx.Invalid("国家代码、国家与城市不合法")
+		if !countryRe.MatchString(cc) || strings.TrimSpace(country) == "" {
+			return httpx.Invalid("国家代码或国家不合法")
+		}
+		country = strings.TrimSpace(country)
+		if err := kernel.CheckCity(city); err != nil {
+			return err
 		}
 		provider, note := cur.Provider, cur.Note
 		if p.Provider != nil {
@@ -635,6 +688,9 @@ func (s *Service) UpdateUpstream(ctx context.Context, adminID, id string, p Upst
 			}
 		}
 		detail := map[string]any{"connectionChanged": conn}
+		if p.City.Set {
+			detail["city"] = map[string]*string{"from": cur.City, "to": city}
+		}
 		if p.MaxTenants != nil {
 			detail["maxTenants"] = map[string]int{"from": cur.MaxTenants, "to": *p.MaxTenants}
 		}

@@ -23,13 +23,14 @@ func New(env *kernel.Env) *Service { return &Service{env: env} }
 
 // PlanVersion 是套餐版本（领域与 OpenAPI PlanVersion 共用）。
 type PlanVersion struct {
-	ID            string           `json:"id"`
-	PlanID        string           `json:"-"`
-	Version       int              `json:"version"`
-	Name          string           `json:"name"`
-	CountryCode   string           `json:"countryCode"`
-	Country       string           `json:"country"`
-	City          string           `json:"city"`
+	ID          string `json:"id"`
+	PlanID      string `json:"-"`
+	Version     int    `json:"version"`
+	Name        string `json:"name"`
+	CountryCode string `json:"countryCode"`
+	Country     string `json:"country"`
+	// City 为 null 表示不限城市（D-27）。
+	City          *string          `json:"city"`
 	Price         kernel.Money     `json:"price"`
 	PeriodDays    int              `json:"periodDays"`
 	IncludedBytes int64            `json:"includedBytes"`
@@ -135,11 +136,16 @@ func CurrentPackVersion(ctx context.Context, q kernel.Q, packID string) (*PackVe
 
 // PlanView 是 OpenAPI Plan。
 type PlanView struct {
-	ID            string       `json:"id"`
-	VersionID     string       `json:"versionId"`
-	CountryCode   string       `json:"countryCode"`
-	Country       string       `json:"country"`
-	City          string       `json:"city"`
+	ID        string `json:"id"`
+	VersionID string `json:"versionId"`
+	// Name 是当前版本的套餐名称（D-27：购买页显示）。
+	Name        string `json:"name"`
+	CountryCode string `json:"countryCode"`
+	Country     string `json:"country"`
+	// City 是套餐固定的城市；null 表示不限城市，可在 Cities 里选（D-27）。
+	City *string `json:"city"`
+	// Cities 是不限城市套餐在该国家、该出口类型下当前有货的城市；固定城市的套餐为空数组。
+	Cities        []CityOption `json:"cities"`
 	MonthlyPrice  kernel.Money `json:"monthlyPrice"`
 	IncludedBytes int64        `json:"includedBytes"`
 	Concurrency   int          `json:"concurrency"`
@@ -147,6 +153,12 @@ type PlanView struct {
 	// ExitMode 是出口类型：exclusive 独享 / shared 共享（D-24）。
 	ExitMode string `json:"exitMode"`
 	Stock    string `json:"stock"`
+}
+
+// CityOption 是 OpenAPI PlanCity：可选城市与它的库存档位。
+type CityOption struct {
+	Name  string `json:"name"`
+	Stock string `json:"stock"`
 }
 
 // PackView 是 OpenAPI TrafficPack。
@@ -201,7 +213,7 @@ func (s *Service) GetCatalog(ctx context.Context) (*Catalog, error) {
 	for _, m := range rules.MonthOptions {
 		c.MonthOptions = append(c.MonthOptions, int(m))
 	}
-	rows, err := q.Query(ctx, `SELECT DISTINCT ON (p.id) p.id, p.sort_order, v.id, v.country_code, v.country_name, v.city, v.price_cents,
+	rows, err := q.Query(ctx, `SELECT DISTINCT ON (p.id) p.id, p.sort_order, v.id, v.name, v.country_code, v.country_name, v.city, v.price_cents,
 	                              v.included_bytes, v.concurrency, v.bandwidth_mbps, p.exit_mode
 	                            FROM plans p JOIN plan_versions v ON v.plan_id = p.id
 	                           WHERE p.status = 'on_sale' ORDER BY p.id, v.version DESC`)
@@ -216,7 +228,7 @@ func (s *Service) GetCatalog(ctx context.Context) (*Catalog, error) {
 	for rows.Next() {
 		var p planRow
 		var price int64
-		if err := rows.Scan(&p.ID, &p.sort, &p.VersionID, &p.CountryCode, &p.Country, &p.City, &price, &p.IncludedBytes,
+		if err := rows.Scan(&p.ID, &p.sort, &p.VersionID, &p.Name, &p.CountryCode, &p.Country, &p.City, &price, &p.IncludedBytes,
 			&p.Concurrency, &p.BandwidthMbps, &p.ExitMode); err != nil {
 			rows.Close()
 			return nil, err
@@ -230,12 +242,22 @@ func (s *Service) GetCatalog(ctx context.Context) (*Catalog, error) {
 	}
 	sortPlans(plans, func(p planRow) (int, string) { return p.sort, p.ID })
 	for _, p := range plans {
-		// 库存提示：独享为空闲资源数，共享为剩余名额数（R-16.7）；对客户只给档位。
+		// 库存提示：独享为空闲资源数，共享为剩余名额数（R-16.7）；对客户只给档位。不限城市按整个国家计（D-27）。
 		avail, _, _, err := inventory.StockCounts(ctx, q, p.ExitMode, p.CountryCode, p.City)
 		if err != nil {
 			return nil, err
 		}
 		p.Stock = inventory.StockLevel(avail, s.env.Cfg.StockLowThreshold)
+		p.Cities = []CityOption{}
+		if p.City == nil {
+			cs, err := inventory.CityStocks(ctx, q, p.ExitMode, p.CountryCode)
+			if err != nil {
+				return nil, err
+			}
+			for _, c := range cs {
+				p.Cities = append(p.Cities, CityOption{Name: c.City, Stock: inventory.StockLevel(c.Available, s.env.Cfg.StockLowThreshold)})
+			}
+		}
 		c.Plans = append(c.Plans, p.PlanView)
 	}
 	prow, err := q.Query(ctx, `SELECT DISTINCT ON (t.id) t.id, t.sort_order, v.id, v.bytes, v.price_cents
@@ -344,10 +366,11 @@ func (s *Service) loadPlan(ctx context.Context, q kernel.Q, id string, allVersio
 
 // PlanVersionInput 是 OpenAPI PlanVersionInput。
 type PlanVersionInput struct {
-	Name          string       `json:"name"`
-	CountryCode   string       `json:"countryCode"`
-	Country       string       `json:"country"`
-	City          string       `json:"city"`
+	Name        string `json:"name"`
+	CountryCode string `json:"countryCode"`
+	Country     string `json:"country"`
+	// City 可选：缺省、null、空串都表示不限城市（D-27）。
+	City          *string      `json:"city"`
 	Price         kernel.Money `json:"price"`
 	PeriodDays    int          `json:"periodDays"`
 	IncludedBytes int64        `json:"includedBytes"`
@@ -359,12 +382,15 @@ var codeRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,31}$`)
 var countryRe = regexp.MustCompile(`^[a-z]{2}$`)
 
 func (in *PlanVersionInput) validate() error {
-	in.Name, in.Country, in.City = strings.TrimSpace(in.Name), strings.TrimSpace(in.Country), strings.TrimSpace(in.City)
+	in.Name, in.Country, in.City = strings.TrimSpace(in.Name), strings.TrimSpace(in.Country), kernel.NormCity(in.City)
+	if err := kernel.CheckCity(in.City); err != nil {
+		return err
+	}
 	switch {
 	case in.Name == "" || len([]rune(in.Name)) > 64:
 		return httpx.Invalid("套餐名称为 1～64 个字符")
-	case !countryRe.MatchString(in.CountryCode) || in.Country == "" || in.City == "":
-		return httpx.Invalid("国家代码（两位小写）、国家与城市必填")
+	case !countryRe.MatchString(in.CountryCode) || in.Country == "":
+		return httpx.Invalid("国家代码（两位小写）与国家必填")
 	case in.Price.Amount < 0 || (in.Price.Currency != "" && in.Price.Currency != "CNY"):
 		return httpx.Invalid("价格必须是非负的人民币分")
 	case in.PeriodDays < 1 || in.IncludedBytes < 0 || in.Concurrency < 1 || in.BandwidthMbps < 1:

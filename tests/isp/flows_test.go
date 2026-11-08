@@ -57,7 +57,13 @@ func (e *Env) Provision(u *User, o ProvisionOpts) Subscription {
 // Purchase 用户自助下单新购 → 管理员确认收款 → 等待可用。
 func (e *Env) Purchase(u *User, months int) (Subscription, Order) {
 	e.t.Helper()
-	o, err := u.Order(OrderInput{Kind: "new", PlanID: e.Plan.ID, Months: months, Quantity: 1}, "")
+	return e.PurchaseWith(u, OrderInput{Kind: "new", PlanID: e.Plan.ID, Months: months, Quantity: 1})
+}
+
+// PurchaseWith 按给定的新购订单下单 → 管理员确认收款 → 等待可用。
+func (e *Env) PurchaseWith(u *User, in OrderInput) (Subscription, Order) {
+	e.t.Helper()
+	o, err := u.Order(in, "")
 	if err != nil {
 		e.t.Fatal(err)
 	}

@@ -72,11 +72,12 @@ type SubscriptionQuotas struct {
 
 // SubscriptionPlan 是套餐快照（直出订阅为 null）。
 type SubscriptionPlan struct {
-	Name          string `json:"name"`
-	ExitMode      string `json:"exitMode"` // exclusive / shared（D-24）
-	CountryCode   string `json:"countryCode"`
-	Concurrency   int    `json:"concurrency"`
-	BandwidthMbps int    `json:"bandwidthMbps"`
+	Name          string  `json:"name"`
+	ExitMode      string  `json:"exitMode"` // exclusive / shared（D-24）
+	CountryCode   string  `json:"countryCode"`
+	City          *string `json:"city"` // 有效城市；null 为不限城市（D-27）
+	Concurrency   int     `json:"concurrency"`
+	BandwidthMbps int     `json:"bandwidthMbps"`
 }
 
 // SubscriptionDirect 是直出代理信息（D-25）。
@@ -132,16 +133,23 @@ type SubscriptionEvent struct {
 // ---- 目录与订单 ----
 
 type Plan struct {
-	ID            string `json:"id"`
-	VersionID     string `json:"versionId"`
-	CountryCode   string `json:"countryCode"`
-	City          string `json:"city"`
-	MonthlyPrice  Money  `json:"monthlyPrice"`
-	IncludedBytes int64  `json:"includedBytes"`
-	Concurrency   int    `json:"concurrency"`
-	BandwidthMbps int    `json:"bandwidthMbps"`
-	ExitMode      string `json:"exitMode"`
-	Stock         string `json:"stock"`
+	ID            string     `json:"id"`
+	VersionID     string     `json:"versionId"`
+	Name          string     `json:"name"`
+	CountryCode   string     `json:"countryCode"`
+	City          *string    `json:"city"`   // null 为不限城市（D-27）
+	Cities        []PlanCity `json:"cities"` // 不限城市套餐当前有货的城市
+	MonthlyPrice  Money      `json:"monthlyPrice"`
+	IncludedBytes int64      `json:"includedBytes"`
+	Concurrency   int        `json:"concurrency"`
+	BandwidthMbps int        `json:"bandwidthMbps"`
+	ExitMode      string     `json:"exitMode"`
+	Stock         string     `json:"stock"`
+}
+
+type PlanCity struct {
+	Name  string `json:"name"`
+	Stock string `json:"stock"`
 }
 
 type TrafficPack struct {
@@ -210,6 +218,7 @@ type OrderInput struct {
 	SubscriptionID string `json:"subscriptionId,omitempty"`
 	PackID         string `json:"packId,omitempty"`
 	PackVersionID  string `json:"packVersionId,omitempty"`
+	City           string `json:"city,omitempty"` // 新购可选城市（D-27）
 }
 
 type ExitRequest struct {
@@ -419,6 +428,7 @@ type Upstream struct {
 	Host       string  `json:"host"`
 	Port       int     `json:"port"`
 	Status     string  `json:"status"`
+	City       *string `json:"city"` // 未填为 null（D-27）
 	BoundSub   *string `json:"boundSubscriptionId"`
 	RowVersion int64   `json:"rowVersion"`
 	MaxTenants int     `json:"maxTenants"`

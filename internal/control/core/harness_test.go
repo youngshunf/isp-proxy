@@ -424,7 +424,11 @@ type subView struct {
 	ID        string   `json:"id"`
 	Lifecycle string   `json:"lifecycle"`
 	Blockers  []string `json:"blockers"`
-	Time      struct {
+	Plan      *struct {
+		Name string  `json:"name"`
+		City *string `json:"city"`
+	} `json:"plan"`
+	Time struct {
 		ExpiresAt        *time.Time `json:"expiresAt"`
 		RemainingSeconds int64      `json:"remainingSeconds"`
 		RetentionEndsAt  *time.Time `json:"retentionEndsAt"`

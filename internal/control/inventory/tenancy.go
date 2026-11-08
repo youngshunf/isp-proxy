@@ -60,14 +60,18 @@ func recheck(ctx context.Context, tx *kernel.Tx, id, cond string) (bool, error) 
 	return ok, err
 }
 
-// pick 在地域内挑一个可分配的资源并锁住资源行。无货返回 ErrNoStock。
+// regionSQL 是地域匹配条件（D-27）：$1 国家；$2 城市为 NULL 时匹配该国家全部资源（含没有城市的），
+// 为 X 时只匹配 city = X 的资源。r 为 upstream_resources。
+const regionSQL = `r.country_code = $1 AND ($2::text IS NULL OR r.city = $2::text)`
+
+// pick 在地域内挑一个可分配的资源并锁住资源行。city 为 nil 表示不限城市（D-27）。无货返回 ErrNoStock。
 //
 // 独享：空闲资源中优先上限为 1 的，再随机（R-16.7）；SKIP LOCKED，被并发事务锁住的资源视为已被拿走（A-27）。
 // 共享：有空位的共享资源按当前占用升序、同数随机；逐个等待加锁后重新核对，名额被并发占满就看下一个（A-47）。
-func pick(ctx context.Context, tx *kernel.Tx, mode, country, city string) (string, error) {
+func pick(ctx context.Context, tx *kernel.Tx, mode, country string, city *string) (string, error) {
 	if mode == ModeShared {
 		rows, err := tx.Query(ctx, `SELECT r.id FROM upstream_resources r JOIN nodes n ON n.id = r.node_id
-		                             WHERE r.country_code = $1 AND r.city = $2 AND `+sharedOK+`
+		                             WHERE `+regionSQL+` AND `+sharedOK+`
 		                             ORDER BY isp_shared_occupancy(r.id), random() LIMIT 50`, country, city)
 		if err != nil {
 			return "", err
@@ -103,7 +107,7 @@ func pick(ctx context.Context, tx *kernel.Tx, mode, country, city string) (strin
 	for range 8 {
 		var id string
 		err := tx.QueryRow(ctx, `SELECT r.id FROM upstream_resources r JOIN nodes n ON n.id = r.node_id
-		                          WHERE r.country_code = $1 AND r.city = $2 AND `+exclusiveOK+` AND NOT (r.id = ANY($3))
+		                          WHERE `+regionSQL+` AND `+exclusiveOK+` AND NOT (r.id = ANY($3))
 		                          ORDER BY (r.max_tenants = 1) DESC, random() LIMIT 1 FOR UPDATE OF r SKIP LOCKED`,
 			country, city, tried).Scan(&id)
 		if kernel.IsNoRows(err) {
