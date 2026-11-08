@@ -39,11 +39,6 @@ type Exit struct {
 	SharedCapacity *int       `json:"sharedCapacity"`
 }
 
-type SubscriptionPlan struct {
-	Name     string `json:"name"`
-	ExitMode string `json:"exitMode"`
-}
-
 type Access struct {
 	Version       int       `json:"version"`
 	Host          string    `json:"host"`
@@ -78,6 +73,7 @@ type SubscriptionQuotas struct {
 // SubscriptionPlan 是套餐快照（直出订阅为 null）。
 type SubscriptionPlan struct {
 	Name          string `json:"name"`
+	ExitMode      string `json:"exitMode"` // exclusive / shared（D-24）
 	CountryCode   string `json:"countryCode"`
 	Concurrency   int    `json:"concurrency"`
 	BandwidthMbps int    `json:"bandwidthMbps"`
