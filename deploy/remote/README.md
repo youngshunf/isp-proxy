@@ -16,6 +16,8 @@ deploy/remote/yika.sh hk backup          # 完整备份下载到 ~/yika-backups/
 deploy/remote/yika.sh hk ssh             # 登录服务器
 ```
 
+`targets/` 整个目录被 Git 忽略。每台服务器的部署信息文档（地址、账号密码，例如 `targets/hk-部署信息.md`）也放在这里。
+
 开发机需要：go（版本见 go.mod）、node 22 + corepack、ssh/scp。服务器需要：root 的 SSH 密钥登录、能访问 apt 源与 apt.postgresql.org。
 
 ## 服务器上装了什么
