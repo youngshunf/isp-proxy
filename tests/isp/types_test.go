@@ -69,9 +69,36 @@ type SubscriptionQuotas struct {
 	FreeExitWindowEndsAt *time.Time `json:"freeExitWindowEndsAt"`
 }
 
+// SubscriptionPlan 是套餐快照（直出订阅为 null）。
+type SubscriptionPlan struct {
+	Name          string `json:"name"`
+	CountryCode   string `json:"countryCode"`
+	Concurrency   int    `json:"concurrency"`
+	BandwidthMbps int    `json:"bandwidthMbps"`
+}
+
+// SubscriptionDirect 是直出代理信息（D-25）。
+type SubscriptionDirect struct {
+	BandwidthMbps  int        `json:"bandwidthMbps"`
+	MaxConnections int        `json:"maxConnections"`
+	PaidUntil      *time.Time `json:"paidUntil"`
+}
+
+// AdminUserDirect 是用户详情里的直出代理赠送状态。
+type AdminUserDirect struct {
+	SubscriptionID       *string `json:"subscriptionId"`
+	Lifecycle            *string `json:"lifecycle"`
+	BandwidthMbps        *int    `json:"bandwidthMbps"`
+	DefaultBandwidthMbps int     `json:"defaultBandwidthMbps"`
+	MaxConnections       int     `json:"maxConnections"`
+}
+
 type Subscription struct {
 	ID                string              `json:"id"`
 	Name              string              `json:"name"`
+	Kind              string              `json:"kind"`
+	Plan              *SubscriptionPlan   `json:"plan"`
+	Direct            *SubscriptionDirect `json:"direct"`
 	Lifecycle         string              `json:"lifecycle"`
 	Blockers          []string            `json:"blockers"`
 	Time              SubscriptionTime    `json:"time"`
@@ -248,6 +275,8 @@ type AdminAccess struct {
 type AdminSubscription struct {
 	ID                 string              `json:"id"`
 	Name               string              `json:"name"`
+	Kind               string              `json:"kind"`
+	Direct             *SubscriptionDirect `json:"direct"`
 	User               UserRef             `json:"user"`
 	NodeID             *string             `json:"nodeId"`
 	Lifecycle          string              `json:"lifecycle"`
