@@ -5,9 +5,7 @@
 #   deploy/remote/yika.sh <目标> status            服务状态与健康检查
 #   deploy/remote/yika.sh <目标> logs [服务] [行数] 查看日志（isp-control | gost-agent | nginx，默认 isp-control）
 #   deploy/remote/yika.sh <目标> mail [N]          查看最近 N 封邮件（mail.mode = file 时验证码在这里）
-#   deploy/remote/yika.sh <目标> smtp-gmail [地址] 改用 Gmail 真实发信：输入应用专用密码 → 写服务器 → 改目标配置 → 部署 → 发测试邮件
-#   deploy/remote/yika.sh <目标> smtp-password     只更新服务器上的 SMTP 密码（其他 SMTP 服务商；之后再 deploy）
-#   deploy/remote/yika.sh <目标> mail-test <邮箱>  按当前配置发一封测试邮件
+#   deploy/remote/yika.sh <目标> mail-test <邮箱>  按当前配置发一封测试邮件（发信设置见目标配置的“邮件”一节）
 #   deploy/remote/yika.sh <目标> backup [本机目录]  完整备份（数据库 + 主密钥 + 证书 + 节点 ID）下载到本机
 #   deploy/remote/yika.sh <目标> restore <备份文件> 把备份恢复到一台全新服务器并完成部署（换服务器用）
 #   deploy/remote/yika.sh <目标> ssh [命令]        登录服务器或执行一条命令
@@ -26,7 +24,7 @@ pnpm="corepack pnpm@10.28.1"
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 step() { printf '\n==> %s\n' "$*"; }
 
-[ $# -ge 1 ] || { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ $# -ge 1 ] || { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 target="$1"
 cmd="${2:-deploy}"
 shift 2 2>/dev/null || shift $#
@@ -103,46 +101,63 @@ ship_and_install() {
   printf '\n部署完成：\n  用户前台  https://%s:%s\n  管理后台  https://%s:%s\n' "${PUBLIC_HOST}" "${PORTAL_PORT:-36443}" "${PUBLIC_HOST}" "${ADMIN_PORT:-37443}"
 }
 
-# read_secret <提示> <变量名>：从终端读一行，不回显。
-read_secret() {
-  local v
-  [ -t 0 ] || die "需要在终端里交互执行（要输入密码）"
-  printf '%s' "$1" >&2
-  IFS= read -rs v
-  printf '\n' >&2
-  [ -n "${v}" ] || die "没有输入"
-  eval "$2=\${v}"
+# 发信配置检查；Gmail 地址自动补全服务器与发件人。SMTP_PASSWORD 去掉空格（Gmail 应用专用密码显示时带空格）。
+check_mail() {
+  SMTP_PASSWORD="$(printf '%s' "${SMTP_PASSWORD:-}" | tr -d ' ')"
+  [ "${MAIL_MODE:-file}" = "smtp" ] || return 0
+  [ -n "${SMTP_USERNAME:-}" ] || die "MAIL_MODE=smtp 时要在 ${envfile} 填 SMTP_USERNAME（发信邮箱）"
+  case "${SMTP_USERNAME}" in
+    *@gmail.com | *@googlemail.com)
+      SMTP_ADDR="${SMTP_ADDR:-smtp.gmail.com:587}"
+      SMTP_SECURITY="${SMTP_SECURITY:-starttls}"
+      if [ -n "${SMTP_PASSWORD}" ] && ! [[ "${SMTP_PASSWORD}" =~ ^[a-zA-Z]{16}$ ]]; then
+        die "Gmail 的 SMTP_PASSWORD 应为 16 位应用专用密码（不是 Gmail 登录密码），在 https://myaccount.google.com/apppasswords 生成"
+      fi
+      ;;
+  esac
+  [ -n "${SMTP_ADDR:-}" ] || die "MAIL_MODE=smtp 时要在 ${envfile} 填 SMTP_ADDR（如 smtp.example.com:587）"
+  # 发件人留空时用发信账号本身（Gmail 只允许登录账号或已验证的别名作为发件人）
+  [ -n "${MAIL_FROM:-}" ] || MAIL_FROM="${BRAND:-驿卡} <${SMTP_USERNAME}>"
 }
 
-# 密码经 ssh 标准输入送到服务器，不出现在命令行参数里。
-set_smtp_password() {
-  printf '%s\n' "$1" | rsh "/usr/local/sbin/yika-server set-smtp-password"
+# 打包用的目标配置：写入补全后的发信设置，去掉 SMTP_PASSWORD（密码另经 ssh 标准输入送到服务器 /etc/yika/secrets.env）。
+write_bundle_env() {
+  grep -v -E '^(SMTP_PASSWORD|SMTP_ADDR|SMTP_SECURITY|MAIL_FROM)=' "${envfile}" > "$1"
+  {
+    echo "SMTP_ADDR=\"${SMTP_ADDR:-}\""
+    echo "SMTP_SECURITY=\"${SMTP_SECURITY:-starttls}\""
+    echo "MAIL_FROM=\"${MAIL_FROM:-}\""
+  } >> "$1"
 }
 
-# set_env <键> <值>：改写目标配置里的一行（没有就追加）。
-set_env() {
-  K="$1" V="$2" python3 -I - "${envfile}" <<'EOF'
-import os, re, sys
-p, k, v = sys.argv[1], os.environ["K"], os.environ["V"]
-lines = open(p, encoding="utf-8").read().splitlines()
-pat = re.compile(r"^%s=" % re.escape(k))
-for i, l in enumerate(lines):
-    if pat.match(l):
-        lines[i] = "%s=%s" % (k, v)
-        break
-else:
-    lines.append("%s=%s" % (k, v))
-open(p, "w", encoding="utf-8").write("\n".join(lines) + "\n")
-EOF
-  echo "    ${1}=${2}"
+push_smtp_password() {
+  [ -n "${SMTP_PASSWORD:-}" ] || return 0
+  # 首次部署前服务器上还没有 yika-server，此时由 install 之后再推一次
+  rsh "test -x /usr/local/sbin/yika-server && test -f /etc/yika/secrets.env" 2>/dev/null || return 1
+  step "更新服务器上的 SMTP 密码"
+  printf '%s\n' "${SMTP_PASSWORD}" | rsh "/usr/local/sbin/yika-server set-smtp-password" | sed 's/^/    /'
 }
 
 with_bundle() {
   bundle_work="${BUNDLE_DIR:-$(mktemp -d)}"
   mkdir -p "${bundle_work}/bundle"
   trap 'rm -rf "${bundle_work}"' EXIT
+  check_mail
   build_bundle "${bundle_work}/bundle"
-  ship_and_install "${bundle_work}/bundle" "${1:-}"
+  write_bundle_env "${bundle_work}/bundle/target.env"
+  if push_smtp_password; then
+    ship_and_install "${bundle_work}/bundle" "${1:-}"
+  else
+    ship_and_install "${bundle_work}/bundle" "${1:-}"
+    # 全新服务器：装好后写入密码，再重启控制面使其生效
+    if [ -n "${SMTP_PASSWORD:-}" ]; then
+      push_smtp_password
+      rsh "cd ${remote_dir} && bash ./server.sh install >/dev/null"
+    fi
+  fi
+  if [ "${MAIL_MODE:-file}" = "smtp" ]; then
+    printf '\n发信：%s 经 %s。验证：deploy/remote/yika.sh %s mail-test <收件人邮箱>\n' "${MAIL_FROM}" "${SMTP_ADDR}" "$(basename "${envfile}" .env)"
+  fi
 }
 
 case "${cmd}" in
@@ -174,34 +189,5 @@ case "${cmd}" in
     [ $# -ge 1 ] || die "用法：yika.sh <目标> mail-test <收件人邮箱>"
     rsh "/usr/local/sbin/yika-server mail-test '$1'"
     ;;
-  smtp-password)
-    read_secret "SMTP 密码（输入不显示）：" pw
-    set_smtp_password "${pw}"
-    echo "执行 yika.sh $(basename "${envfile}" .env) deploy 后生效。"
-    ;;
-  smtp-gmail)
-    # Gmail 发信：账号需开两步验证，在 https://myaccount.google.com/apppasswords 生成 16 位应用专用密码。
-    addr="${1:-}"
-    [ -n "${addr}" ] || { printf 'Gmail 地址：'; read -r addr; }
-    addr="$(printf '%s' "${addr}" | tr 'A-Z' 'a-z' | tr -d ' ')"
-    case "${addr}" in *@gmail.com | *@googlemail.com) ;; *) die "不是 Gmail 地址：${addr}（Google Workspace 自有域名邮箱请改用 smtp-password 并手工填 SMTP_*）" ;; esac
-    read_secret "Gmail 应用专用密码（16 位，可带空格，输入不显示）：" pw
-    pw="$(printf '%s' "${pw}" | tr -d ' ')"
-    [[ "${pw}" =~ ^[a-zA-Z]{16}$ ]] || die "应用专用密码应为 16 位字母（不是 Gmail 登录密码）"
-    step "写入服务器 SMTP 密码"
-    set_smtp_password "${pw}"
-    step "更新目标配置 ${envfile}"
-    set_env MAIL_MODE smtp
-    set_env SMTP_ADDR smtp.gmail.com:587
-    set_env SMTP_SECURITY starttls
-    set_env SMTP_USERNAME "${addr}"
-    # Gmail 只允许以登录账号（或已验证的别名）作为发件人
-    set_env MAIL_FROM "\"${BRAND:-驿卡} <${addr}>\""
-    [ -x "${root}/.cache/yika-deploy/amd64/gost" ] || [ -x "${root}/.cache/yika-deploy/arm64/gost" ] && export SKIP_BUILD=1
-    with_bundle
-    step "发测试邮件到 ${addr}"
-    rsh "/usr/local/sbin/yika-server mail-test '${addr}'"
-    echo "去 ${addr} 的收件箱（也看一眼垃圾邮件）确认收到“${BRAND:-驿卡} 发信测试”。"
-    ;;
-  *) die "未知命令 ${cmd}（deploy | status | logs | mail | mail-test | smtp-gmail | smtp-password | backup | restore | ssh）" ;;
+  *) die "未知命令 ${cmd}（deploy | status | logs | mail | mail-test | backup | restore | ssh）" ;;
 esac

@@ -58,18 +58,24 @@ deploy/remote/yika.sh hk ssh             # 登录服务器
 
 `MAIL_MODE=file` 时不真实发信。注册、找回密码的验证码用 `yika.sh <目标> mail` 查看。
 
-**Gmail（推荐）**：Gmail 发信要用应用专用密码。先给账号开两步验证，再到 https://myaccount.google.com/apppasswords 生成一个 16 位应用专用密码。然后执行：
+**Gmail（推荐）**：Gmail 发信要用应用专用密码。先给账号开两步验证，再到 https://myaccount.google.com/apppasswords 生成一个 16 位应用专用密码。然后在目标配置里填三项：
 
 ```bash
-deploy/remote/yika.sh hk smtp-gmail 你的地址@gmail.com
+MAIL_MODE=smtp
+SMTP_USERNAME=你的地址@gmail.com
+SMTP_PASSWORD="abcd efgh ijkl mnop"   # 应用专用密码；带空格时必须加双引号
 ```
 
-按提示输入应用专用密码（不回显）后，脚本会依次：
+填好后依次执行：
 
-1. 把密码经 ssh 写进服务器 `/etc/yika/secrets.env`；
-2. 把目标配置改成 `smtp.gmail.com:587` STARTTLS，发件人设为该 Gmail 地址；
-3. 部署；
-4. 给该地址发一封“发信测试”邮件。
+```bash
+deploy/remote/yika.sh hk deploy
+deploy/remote/yika.sh hk mail-test 收件人@example.com
+```
+
+`SMTP_ADDR`、`SMTP_SECURITY`、`MAIL_FROM` 留空时，会自动设为 `smtp.gmail.com:587`、STARTTLS、`驿卡 <你的地址>`。
+
+密码只在本机这份目标配置里（`targets/` 不进 Git）。部署时它经 ssh 标准输入写进服务器 `/etc/yika/secrets.env`，不会出现在服务器上的 `target.env` 里，也不会出现在命令行参数里。
 
 Gmail 个人账号每天大约能发 500 封。发件人只能是登录的账号本身，或已在 Gmail 里验证过的别名。
 
@@ -77,10 +83,9 @@ Gmail 个人账号每天大约能发 500 封。发件人只能是登录的账号
 
 **其他 SMTP 服务商**：
 
-1. 在目标配置里填 `MAIL_MODE=smtp`、`SMTP_ADDR`、`SMTP_SECURITY`、`SMTP_USERNAME`、`MAIL_FROM`。
-2. 执行 `yika.sh <目标> smtp-password` 输入密码。
-3. 执行 `deploy`。
-4. 用 `yika.sh <目标> mail-test <邮箱>` 验证；发送失败时会打印 SMTP 服务器返回的错误。
+1. 在目标配置里填 `MAIL_MODE=smtp`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`SMTP_ADDR`，以及按需填 `SMTP_SECURITY` 与 `MAIL_FROM`。
+2. 执行 `deploy`。
+3. 用 `mail-test` 验证。发送失败时会打印 SMTP 服务器返回的错误。
 
 ## 已知限制
 
