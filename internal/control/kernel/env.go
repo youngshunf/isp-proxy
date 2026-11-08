@@ -44,7 +44,7 @@ type Config struct {
 	// Box 加密接入密码与上游密码（AES-256-GCM，密钥来自 ISP_SECRET_KEY，与平台共用）。必填。
 	Box *secret.Box
 	// Geo 按出口 IP 解析国家（探测结果不带国家，控制面自行解析后再做国家符合判定，A-12）。
-	// 默认 StaticGeo{}（全部未知 → 国家不符，不放行切换）；开发与测试用静态映射，生产接 GeoIP 库。
+	// 默认 StaticGeo{}（全部未知 → 国家不符，不放行切换）；测试用静态映射，isp-control 用 geoip.Lookup（手工映射 + 国家库）。
 	Geo GeoLookup
 	// EchoURL 是探测使用的 IP 回显端点。
 	EchoURL string

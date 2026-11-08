@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/go-gost/gost/internal/control/geoip"
 	"github.com/go-gost/gost/internal/control/kernel"
 	"github.com/go-gost/gost/internal/control/mail"
 	"github.com/go-gost/gost/internal/control/secret"
@@ -80,9 +82,12 @@ type MailConfig struct {
 type CoreConfig struct {
 	// EchoURL 是节点探测使用的 IP 回显端点（经候选/当前出口访问，返回出口 IP）。节点 probe.echo_url 非空时以节点配置为准。
 	EchoURL string `yaml:"echo_url"`
-	// ExitCountries 是静态“出口 IP → 国家代码”映射：探测结果只带 IP，控制面据此判定国家是否符合套餐。
-	// 开发与测试用；生产应接 GeoIP 库（kernel.GeoLookup）。未列出的 IP 视为国家未知，换出口比较不通过。
+	// ExitCountries 是手工“出口 IP 或网段 → 国家代码”映射（如 "149.119.188.22": us、"2001:db8::/48": us）。
+	// 探测结果只带 IP，控制面据此与 GeoIPDB 判定国家：手工映射优先（最长前缀），用来纠正归属地库判错的 IP。
 	ExitCountries map[string]string `yaml:"exit_countries"`
+	// GeoIPDB 是 MaxMind DB 格式的国家库路径（DB-IP Country Lite 或 GeoLite2 Country）。
+	// 文件更新后自动重新加载；为空或文件缺失时只用 ExitCountries，两处都查不到的 IP 视为国家未知，出口不放行。
+	GeoIPDB string `yaml:"geoip_db"`
 	// SchedulerInterval 是调度循环间隔（默认 5 秒，docs/06 §3）。
 	SchedulerInterval time.Duration `yaml:"scheduler_interval"`
 	// TaskTimeout 是变更任务等待节点应用的上限（默认 2 分钟）。
@@ -101,16 +106,20 @@ type CoreConfig struct {
 	SharedExitDefaultCapacity int `yaml:"shared_exit_default_capacity"`
 }
 
-// Kernel 转为 kernel.Config（Box 由 api.Assemble 填写）。
-func (c CoreConfig) Kernel() kernel.Config {
-	var geo kernel.GeoLookup
-	if len(c.ExitCountries) > 0 {
-		geo = kernel.StaticGeo(c.ExitCountries)
+// Kernel 转为 kernel.Config（Box 由 api.Assemble 填写）。手工映射写错时报错，国家库缺失只记日志。
+func (c CoreConfig) Kernel(log *slog.Logger) (kernel.Config, error) {
+	overrides, err := geoip.ParseOverrides(c.ExitCountries)
+	if err != nil {
+		return kernel.Config{}, err
+	}
+	geo := geoip.Lookup{Overrides: overrides}
+	if c.GeoIPDB != "" {
+		geo.DB = geoip.OpenDB(c.GeoIPDB, log)
 	}
 	return kernel.Config{EchoURL: c.EchoURL, Geo: geo, SchedulerInterval: c.SchedulerInterval, TaskTimeout: c.TaskTimeout,
 		ProbeTimeout: c.ProbeTimeout, ExitCheckInterval: c.ExitCheckInterval, NodeOfflineAfter: c.NodeOfflineAfter,
 		DirectDefaultBandwidthMbps: c.DirectDefaultBandwidthMbps, DirectMaxConnections: c.DirectMaxConnections,
-		SharedExitDefaultCapacity: c.SharedExitDefaultCapacity}
+		SharedExitDefaultCapacity: c.SharedExitDefaultCapacity}, nil
 }
 
 // DevConfig 是只用于开发与平台 E2E 的开关。

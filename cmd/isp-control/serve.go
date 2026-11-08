@@ -129,7 +129,10 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer, hooks *serve
 	worker := &mail.Worker{Pool: pool, Box: box, Sender: sender, From: cfg.Mail.From,
 		Brand: mail.Brand{Name: cfg.Mail.Brand, SiteURL: cfg.Mail.SiteURL}, Logger: log}
 	worker.Init()
-	core := cfg.Core.Kernel()
+	core, err := cfg.Core.Kernel(log)
+	if err != nil {
+		return err
+	}
 	core.Brand = cfg.Mail.Brand // 目录接口返回给前台的品牌名，与邮件署名一致
 	deps := api.Deps{Pool: pool, Box: box, Cookies: session.Cookies{Secure: cfg.SecureCookies},
 		Mail: worker, Issuer: cfg.TOTPIssuer, Logger: log, Core: core}

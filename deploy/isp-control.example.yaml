@@ -24,10 +24,13 @@ agent:
 core:
   # 节点探测访问的 IP 回显端点（返回出口 IP 的纯文本）。
   echo_url: https://echo.example.com/ip
-  # 出口 IP → 国家代码（小写 ISO 3166-1）。探测只回报 IP，控制面据此判定“国家符合套餐”；未列出的视为未知、比较不通过。
-  # 开发与测试用静态映射；生产应接 GeoIP 库。
+  # 出口国家识别：探测只回报 IP，控制面查归属地判定“国家符合套餐”；查不到的视为未知、出口不放行。
+  # MaxMind DB 格式的国家库（DB-IP Country Lite 或 GeoLite2 Country）；文件更新后一分钟内自动重新加载。
+  geoip_db: /var/lib/isp-control/geoip/country.mmdb
+  # 手工映射（IP 或网段 → 小写 ISO 3166-1 国家代码），优先于国家库，最长前缀优先。
   exit_countries:
     203.0.113.10: us
+    2001:db8::/48: us
   # 录入上游资源时不填“绑定上限”的默认值（D-24）：一个资源最多同时给几个共享订阅使用；1 表示只给独享套餐。
   shared_exit_default_capacity: 3
   # 以下调度参数一般不改（零值取内核默认值）；平台 E2E（tests/isp）调小以加快场景。

@@ -7,6 +7,7 @@
 #   server.sh mail [N]       查看最近 N 封文件投递的邮件（mail.mode = file 时，验证码在这里）
 #   server.sh mail-test <邮箱>        按当前配置发一封测试邮件
 #   server.sh set-smtp-password      从标准输入读 SMTP 密码写入 /etc/yika/secrets.env（再 install 一次生效）
+#   server.sh geoip-update   下载最新的 DB-IP 免费国家库（每月由 yika-geoip.timer 自动执行）
 #
 # 同目录需要：target.env、bin/isp-control、bin/gost、web/portal、web/admin、units/、backup.sh；
 # 可选 tls/fullchain.pem + tls/key.pem（正式证书）、restore/backup.tar.gz（从备份恢复，只用于全新服务器）。
@@ -43,6 +44,7 @@ load_target() {
   ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
   ECHO_URL="${ECHO_URL:-https://api.ipify.org}"
   EXIT_COUNTRIES="${EXIT_COUNTRIES:-}"
+  GEOIP="${GEOIP:-dbip}"
   MAIL_MODE="${MAIL_MODE:-file}"
   MAIL_FROM="${MAIL_FROM:-${BRAND} <no-reply@example.invalid>}"
   SMTP_ADDR="${SMTP_ADDR:-}"
@@ -56,6 +58,9 @@ is_ip() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$1" == *:* ]]; }
 psql_q() { runuser -u postgres -- psql -X -v ON_ERROR_STOP=1 -tA "$@"; }
 db_q() { psql_q -d isp_control "$@"; }
 sql_lit() { printf "'%s'" "${1//\'/\'\'}"; }
+
+geoip_dir=/var/lib/isp-control/geoip
+geoip_db="${geoip_dir}/country.mmdb"
 
 # ---------------------------------------------------------------- install
 
@@ -194,6 +199,9 @@ write_control_config() {
     $(yaml_str "${ip}"): $(yaml_str "${cc}")"
   done
   [ -n "${countries}" ] || countries=" {}"
+  local geoip_line=""
+  [ "${GEOIP}" = "off" ] || geoip_line="
+  geoip_db: ${geoip_db}"
   local mail_extra=""
   if [ "${MAIL_MODE}" = "smtp" ]; then
     mail_extra="
@@ -217,7 +225,7 @@ agent:
   long_poll: 25s
 core:
   echo_url: $(yaml_str "${ECHO_URL}")
-  exit_countries:${countries}
+  exit_countries:${countries}${geoip_line}
   shared_exit_default_capacity: 3
 mail:
   mode: ${MAIL_MODE}
@@ -380,9 +388,75 @@ RandomizedDelaySec=10m
 [Install]
 WantedBy=timers.target
 EOF
+  if [ "${GEOIP}" = "off" ]; then
+    systemctl disable --now yika-geoip.timer >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/yika-geoip.service /etc/systemd/system/yika-geoip.timer
+  else
+    cat > /etc/systemd/system/yika-geoip.service <<'EOF'
+[Unit]
+Description=驿卡 IP 归属地库每月更新
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/yika-server geoip-update
+EOF
+    cat > /etc/systemd/system/yika-geoip.timer <<'EOF'
+[Unit]
+Description=驿卡 IP 归属地库每月更新
+
+[Timer]
+OnCalendar=*-*-03 04:00:00
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+EOF
+  fi
   systemctl daemon-reload
   systemctl enable isp-control gost-agent yika-backup.timer >/dev/null 2>&1
   systemctl start yika-backup.timer
+  if [ "${GEOIP}" != "off" ]; then
+    systemctl enable --now yika-geoip.timer >/dev/null 2>&1
+  fi
+}
+
+# DB-IP IP to Country Lite：免费、无需注册，按月发布，许可 CC BY 4.0（需署名 DB-IP，管理后台页脚已署名）。
+# 先取本月，取不到（月初尚未发布）再取上月。下载失败不动现有库文件；控制面一分钟内自动换用新文件。
+cmd_geoip_update() {
+  local tmp month url ok=""
+  install -d -m 0755 -o isp-control -g isp-control "${geoip_dir}"
+  tmp="$(mktemp "${geoip_dir}/.download.XXXXXX")"
+  for month in "$(date -u +%Y-%m)" "$(date -u -d "$(date -u +%Y-%m-15) -1 month" +%Y-%m)"; do
+    url="https://download.db-ip.com/free/dbip-country-lite-${month}.mmdb.gz"
+    if curl -fsSL --retry 2 --max-time 300 "${url}" 2>/dev/null | gunzip -c > "${tmp}" 2>/dev/null \
+      && [ "$(stat -c %s "${tmp}")" -gt 1000000 ] && tail -c 131072 "${tmp}" | grep -aq 'MaxMind.com'; then
+      ok="${month}"
+      break
+    fi
+  done
+  if [ -z "${ok}" ]; then
+    rm -f "${tmp}"
+    printf '警告：IP 归属地库下载失败（download.db-ip.com），沿用现有文件\n' >&2
+    return 1
+  fi
+  chmod 0644 "${tmp}"
+  chown isp-control:isp-control "${tmp}"
+  mv -f "${tmp}" "${geoip_db}"
+  info "IP 归属地库已更新：DB-IP Country Lite ${ok}（${geoip_db}）"
+}
+
+ensure_geoip() {
+  [ "${GEOIP}" = "off" ] && return 0
+  step "IP 归属地库"
+  # 文件不存在或超过 40 天没更新时立即下载；失败只警告，出口国家仍可用 EXIT_COUNTRIES 手工指定。
+  if [ -s "${geoip_db}" ] && [ -z "$(find "${geoip_db}" -mtime +40 2>/dev/null)" ]; then
+    info "已有 ${geoip_db}（$(date -u -r "${geoip_db}" +%F) 更新），每月 3 日自动更新"
+  else
+    cmd_geoip_update || true
+  fi
 }
 
 write_nginx() {
@@ -523,6 +597,7 @@ cmd_install() {
   ensure_secrets
   ensure_database
   install_files
+  ensure_geoip
   write_control_config
   migrate_db
   ensure_node
@@ -543,7 +618,7 @@ cmd_status() {
   load_target
   step "状态"
   local s
-  for s in postgresql isp-control gost-agent nginx fail2ban yika-backup.timer; do
+  for s in postgresql isp-control gost-agent nginx fail2ban yika-backup.timer yika-geoip.timer; do
     printf '    %-18s %s\n' "${s}" "$(systemctl is-active "${s}" 2>/dev/null || true)"
   done
   printf '    %-18s %s\n' "healthz" "$(curl -fsk "http://127.0.0.1:${CONTROL_HTTP_PORT}/healthz" 2>/dev/null || echo 失败)"
@@ -627,5 +702,6 @@ case "${1:-install}" in
   mail) shift; cmd_mail "$@" ;;
   mail-test) shift; cmd_mail_test "$@" ;;
   set-smtp-password) cmd_set_smtp_password ;;
-  *) die "未知命令 $1（install | status | backup | mail [N] | mail-test <邮箱> | set-smtp-password）" ;;
+  geoip-update) cmd_geoip_update ;;
+  *) die "未知命令 $1（install | status | backup | mail [N] | mail-test <邮箱> | set-smtp-password | geoip-update）" ;;
 esac

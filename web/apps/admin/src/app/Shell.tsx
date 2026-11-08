@@ -185,7 +185,13 @@ export function Shell() {
           <Suspense fallback={<PageFallback />}>
             <Outlet />
           </Suspense>
-          <p className="foot-note">时间按 {TZ_LABEL} 显示；流量按 1 GB = 10⁹ 字节计；金额单位为人民币元。</p>
+          <p className="foot-note">
+            时间按 {TZ_LABEL} 显示；流量按 1 GB = 10⁹ 字节计；金额单位为人民币元。出口国家识别使用{' '}
+            <a href="https://db-ip.com" target="_blank" rel="noreferrer">
+              IP Geolocation by DB-IP
+            </a>
+            。
+          </p>
         </main>
       </div>
       <ScrollRestoration />
