@@ -1340,6 +1340,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin-api/users/{userId}/direct-proxy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 赠送服务器直出代理（或调整带宽上限）
+         * @description D-25（docs/06 §9.2）。用户没有直出代理时新建一个直出订阅（每用户最多一个）：签发接入（三个端口与凭据）、
+         *     经节点本机出站，只限带宽不限流量，可用截止跟随该用户时长有效的 ISP 订阅（没有则阻断原因 no_paid_subscription）。
+         *     已有时只调整带宽上限（幂等）；开通失败的重新开通。带宽未填取 `core.direct_default_bandwidth_mbps`，
+         *     并发上限取 `core.direct_max_connections`。审计 direct.grant / direct.update / direct.retry。
+         */
+        put: operations["adminGrantDirect"];
+        post?: never;
+        /**
+         * 收回服务器直出代理
+         * @description 中止进行中的开通或换接入，撤销凭据，端口进入冷却，直出订阅删除。没有直出代理时同样返回 204。审计 direct.revoke。
+         */
+        delete: operations["adminRevokeDirect"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin-api/orders": {
         parameters: {
             query?: never;
@@ -1801,9 +1830,10 @@ export interface components {
         Lifecycle: "pending" | "fulfill_failed" | "active" | "retained" | "released";
         /**
          * @description 阻断原因。数组按 docs/01 §7.2 展示优先级排序（即本枚举顺序）；空数组表示可用。
+         *     no_paid_subscription 只出现在直出订阅（D-25）：该用户没有时长有效的 ISP 订阅。直出订阅不会出现 expired 与 traffic_exhausted。
          * @enum {string}
          */
-        Blocker: "account_banned" | "released" | "admin_paused" | "pending" | "fulfill_failed" | "expired" | "traffic_exhausted" | "changing" | "dataplane";
+        Blocker: "account_banned" | "released" | "admin_paused" | "pending" | "fulfill_failed" | "expired" | "no_paid_subscription" | "traffic_exhausted" | "changing" | "dataplane";
         /**
          * @description 最近一次检测结果；stale 表示检测结果已过期（超过检测间隔两倍未更新）
          * @enum {string}
@@ -1881,10 +1911,31 @@ export interface components {
              */
             freeExitWindowEndsAt: string | null;
         };
+        /**
+         * @description 订阅类型：isp 经 ISP 上游出站；direct 是管理员赠送的服务器直出代理（D-25），经中转服务器自身地址出站
+         * @enum {string}
+         */
+        SubscriptionKind: "isp" | "direct";
+        /** @description 直出代理（D-25）：只限带宽不限流量，可用截止跟随付费订阅 */
+        SubscriptionDirect: {
+            /** @description 带宽上限 */
+            bandwidthMbps: number;
+            /** @description 并发连接上限 */
+            maxConnections: number;
+            /**
+             * Format: date-time
+             * @description 可用截止 = 该用户时长有效（已开始、未到期、未删除）的 ISP 订阅中最晚的到期时间；没有时为 null（阻断原因 no_paid_subscription）
+             */
+            paidUntil: string | null;
+        };
         Subscription: {
             id: string;
             name: string;
-            plan: components["schemas"]["SubscriptionPlan"];
+            kind: components["schemas"]["SubscriptionKind"];
+            /** @description 套餐快照；直出订阅为 null */
+            plan: components["schemas"]["SubscriptionPlan"] | null;
+            /** @description 直出代理信息；ISP 订阅为 null。直出订阅的 time.expiresAt 即 paidUntil，traffic.totalBytes 为 0（不限流量），usedBytes 为累计用量，exit 恒为 null */
+            direct: components["schemas"]["SubscriptionDirect"] | null;
             lifecycle: components["schemas"]["Lifecycle"];
             blockers: components["schemas"]["Blocker"][];
             time: components["schemas"]["SubscriptionTime"];
@@ -2222,16 +2273,21 @@ export interface components {
         };
         /** @enum {string} */
         AccessState: "pending" | "active" | "revoked" | "failed";
+        AdminSubscriptionPlan: components["schemas"]["SubscriptionPlan"] & {
+            planId: string;
+            planVersionId: string;
+            planVersion: number;
+        };
         AdminSubscription: {
             id: string;
             name: string;
+            kind: components["schemas"]["SubscriptionKind"];
             user: components["schemas"]["UserRef"];
             nodeId: string | null;
-            plan: components["schemas"]["SubscriptionPlan"] & {
-                planId: string;
-                planVersionId: string;
-                planVersion: number;
-            };
+            /** @description 套餐快照；直出订阅为 null */
+            plan: components["schemas"]["AdminSubscriptionPlan"] | null;
+            /** @description 直出代理信息；ISP 订阅为 null */
+            direct: components["schemas"]["SubscriptionDirect"] | null;
             lifecycle: components["schemas"]["AdminLifecycle"];
             /** @description 全部阻断原因，按 docs/01 §7.2 排序 */
             blockers: components["schemas"]["Blocker"][];
@@ -2385,8 +2441,11 @@ export interface components {
             exitRequestId?: string;
             reason: string;
         };
-        /** @enum {string} */
-        TaskKind: "access_change" | "password_reset" | "exit_change" | "combined" | "fulfill";
+        /**
+         * @description direct_grant 是赠送直出代理（D-25）：签发首个接入并等节点应用
+         * @enum {string}
+         */
+        TaskKind: "access_change" | "password_reset" | "exit_change" | "combined" | "fulfill" | "direct_grant";
         /** @enum {string} */
         TaskState: "queued" | "running" | "succeeded" | "failed" | "cancelled";
         Task: {
@@ -2773,6 +2832,23 @@ export interface components {
             subscriptions: components["schemas"]["AdminSubscription"][];
             recentOrders: components["schemas"]["AdminOrder"][];
             activeSessions: number;
+            direct: components["schemas"]["AdminUserDirect"];
+        };
+        /** @description 服务器直出代理赠送状态（D-25）。subscriptionId 为 null 表示未赠送 */
+        AdminUserDirect: {
+            subscriptionId: string | null;
+            lifecycle: components["schemas"]["Lifecycle"] | null;
+            /** @description 已赠送时的带宽上限 */
+            bandwidthMbps: number | null;
+            /** @description 赠送时带宽的默认值（core.direct_default_bandwidth_mbps） */
+            defaultBandwidthMbps: number;
+            /** @description 并发上限（core.direct_max_connections） */
+            maxConnections: number;
+        };
+        AdminDirectGrantInput: {
+            /** @description 带宽上限（Mbps）；不填取默认值 */
+            bandwidthMbps?: number;
+            reason?: string;
         };
         AdminUserPage: {
             items: components["schemas"]["AdminUser"][];
@@ -3926,6 +4002,8 @@ export interface operations {
                 q?: string;
                 userId?: string;
                 nodeId?: string;
+                /** @description 订阅类型 */
+                kind?: components["schemas"]["SubscriptionKind"];
                 lifecycle?: components["schemas"]["AdminLifecycle"][];
                 /** @description 含该阻断原因 */
                 blocker?: components["schemas"]["Blocker"];
@@ -5314,6 +5392,71 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["TooManyRequests"];
+        };
+    };
+    adminGrantDirect: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description 与 isp_csrf Cookie 相同的值（双提交） */
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDirectGrantInput"];
+            };
+        };
+        responses: {
+            /** @description 直出订阅 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSubscriptionDetail"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            412: components["responses"]["Precondition"];
+            422: components["responses"]["Invalid"];
+        };
+    };
+    adminRevokeDirect: {
+        parameters: {
+            query?: {
+                /** @description 收回原因（可选，不超过 200 字） */
+                reason?: string;
+            };
+            header: {
+                /** @description 与 isp_csrf Cookie 相同的值（双提交） */
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已收回 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Invalid"];
         };
     };
     adminListOrders: {

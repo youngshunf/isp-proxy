@@ -61,21 +61,22 @@ func (a Actor) eventActor() (string, *string) {
 
 // sub 是加锁后的订阅快照。
 type sub struct {
-	ID, UserID, Lifecycle, RulesVersion, PlanVersionID string
-	Node                                               *string
-	AdminPaused                                        bool
-	CurAccess, CurExit                                 *string
-	UserBanned                                         bool
-	FirstReadyAt                                       *time.Time
-	CreatedFromOrder                                   *string
+	ID, UserID, Lifecycle, RulesVersion, Kind string
+	PlanVersionID                             *string // 直出订阅（D-25）没有套餐
+	Node                                      *string
+	AdminPaused                               bool
+	CurAccess, CurExit                        *string
+	UserBanned                                bool
+	FirstReadyAt                              *time.Time
+	CreatedFromOrder                          *string
 }
 
 func lockSub(ctx context.Context, tx *kernel.Tx, id string) (*sub, error) {
 	s := &sub{}
-	err := tx.QueryRow(ctx, `SELECT s.id, s.user_id, s.lifecycle, s.rules_version, s.plan_version_id, s.node_id, s.admin_paused,
+	err := tx.QueryRow(ctx, `SELECT s.id, s.user_id, s.lifecycle, s.rules_version, s.kind, s.plan_version_id, s.node_id, s.admin_paused,
 	                            s.current_access_id, s.current_exit_id, u.status = 'banned', s.first_ready_at, s.created_from_order_id
 	                          FROM subscriptions s JOIN users u ON u.id = s.user_id WHERE s.id = $1 FOR UPDATE OF s`, id).Scan(
-		&s.ID, &s.UserID, &s.Lifecycle, &s.RulesVersion, &s.PlanVersionID, &s.Node, &s.AdminPaused, &s.CurAccess, &s.CurExit,
+		&s.ID, &s.UserID, &s.Lifecycle, &s.RulesVersion, &s.Kind, &s.PlanVersionID, &s.Node, &s.AdminPaused, &s.CurAccess, &s.CurExit,
 		&s.UserBanned, &s.FirstReadyAt, &s.CreatedFromOrder)
 	if kernel.IsNoRows(err) || (err == nil && s.Lifecycle == "deleted") {
 		return nil, httpx.NotFound("没有找到这个订阅")
@@ -245,6 +246,9 @@ func (s *Service) Fulfill(ctx context.Context, tx *kernel.Tx, subID string, o Fu
 	if sb.Lifecycle != "pending" && sb.Lifecycle != "fulfill_failed" {
 		return "", httpx.Precondition("只有待履约或履约异常的订阅可以开通")
 	}
+	if sb.Kind == KindDirect {
+		return s.startDirectGrant(ctx, tx, sb, o.Actor)
+	}
 	if err := ensureIdle(ctx, tx, subID); err != nil {
 		return "", err
 	}
@@ -361,6 +365,12 @@ func (s *Service) RetryFulfillment(ctx context.Context, tx *kernel.Tx, subID, no
 	if err != nil {
 		return "", err
 	}
+	if sb.Kind == KindDirect {
+		if sb.Lifecycle != "pending" && sb.Lifecycle != "fulfill_failed" {
+			return "", httpx.Precondition("只有待开通或开通失败的直出代理可以重试")
+		}
+		return s.startDirectGrant(ctx, tx, sb, AdminActor(adminID))
+	}
 	order, err := s.fulfillOrder(ctx, tx, sb)
 	if err != nil {
 		return "", err
@@ -455,7 +465,7 @@ func changePrecondition(sb *sub, a Actor) error {
 	default:
 		return httpx.Precondition("订阅尚未开通，暂不能更换")
 	}
-	if sb.CurAccess == nil || sb.CurExit == nil {
+	if sb.CurAccess == nil || (sb.CurExit == nil && sb.Kind != KindDirect) {
 		return httpx.Precondition("订阅当前没有生效的接入或出口")
 	}
 	if a.Kind == "user" && (sb.UserBanned || sb.AdminPaused) {
@@ -485,6 +495,9 @@ func (s *Service) ChangeExit(ctx context.Context, tx *kernel.Tx, subID string, i
 		return "", err
 	}
 	a := AdminActor(adminID)
+	if sb.Kind == KindDirect {
+		return "", httpx.Precondition("直出代理经中转服务器直接出站，没有出口可换")
+	}
 	if err := changePrecondition(sb, a); err != nil {
 		return "", err
 	}
@@ -773,6 +786,8 @@ func (s *Service) succeed(ctx context.Context, tx *kernel.Tx, r *running) error 
 			return err
 		}
 		return nil
+	case KindDirectGrant:
+		return s.activateDirect(ctx, tx, r, newAccessV)
 	case "access_change":
 		ev.Kind, ev.Detail = "access_changed", fmt.Sprintf("接入 v%d → v%d：端口与密码已更换；出口与余量不变", oldAccessV, newAccessV)
 	case "password_reset":
@@ -896,6 +911,10 @@ func (s *Service) fail(ctx context.Context, tx *kernel.Tx, r *running, code, rea
 	}
 	if r.Kind == "fulfill" {
 		if err := s.markFulfillFailed(ctx, tx, r.Sub, r.Order, &r.ID, code, reason); err != nil {
+			return err
+		}
+	} else if r.Kind == KindDirectGrant {
+		if err := s.markDirectFailed(ctx, tx, r, code, reason); err != nil {
 			return err
 		}
 	} else {

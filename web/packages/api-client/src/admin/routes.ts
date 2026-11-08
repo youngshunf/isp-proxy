@@ -2,7 +2,7 @@
 import type { paths } from '../generated/schema'
 import type { AdminOp } from './types'
 
-export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE'
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 export type AdminPath = Extract<keyof paths, `/admin-api/${string}`>
 
 export const ADMIN_ROUTES = {
@@ -59,6 +59,8 @@ export const ADMIN_ROUTES = {
   adminBanUser: ['POST', '/admin-api/users/{userId}/ban'],
   adminUnbanUser: ['POST', '/admin-api/users/{userId}/unban'],
   adminSendPasswordReset: ['POST', '/admin-api/users/{userId}/password-reset-email'],
+  adminGrantDirect: ['PUT', '/admin-api/users/{userId}/direct-proxy'],
+  adminRevokeDirect: ['DELETE', '/admin-api/users/{userId}/direct-proxy'],
   adminListOrders: ['GET', '/admin-api/orders'],
   adminCreateOrder: ['POST', '/admin-api/orders'],
   adminGetOrder: ['GET', '/admin-api/orders/{orderId}'],

@@ -40,6 +40,8 @@ type Hooks struct {
 	UserSubscriptions func(ctx context.Context, userID string) (any, error)
 	// UserRecentOrders 返回用户详情的 recentOrders（openapi AdminOrder 数组）。
 	UserRecentOrders func(ctx context.Context, userID string) (any, error)
+	// UserDirect 返回用户详情的 direct（openapi AdminUserDirect：是否已赠送直出代理、带宽上限与默认值，D-25）。
+	UserDirect func(ctx context.Context, userID string) (any, error)
 }
 
 // Limits 是管理员登录限流。

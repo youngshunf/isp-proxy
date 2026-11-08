@@ -18,7 +18,8 @@ import (
 	"github.com/go-gost/gost/internal/control/task"
 )
 
-// blockersSQL 计算阻断原因数组；$1 为当前时间。
+// blockersSQL 计算阻断原因数组；$1 为当前时间。直出订阅（D-25）不会到期也不会耗尽流量，没有付费订阅时为
+// no_paid_subscription；开通中的 direct_grant 任务与 fulfill 一样体现为 pending 而不是 changing。
 const blockersSQL = `ARRAY_REMOVE(ARRAY[
 	CASE WHEN u.status = 'banned' THEN 'account_banned' END,
 	CASE WHEN s.lifecycle = 'released' THEN 'released' END,
@@ -26,8 +27,12 @@ const blockersSQL = `ARRAY_REMOVE(ARRAY[
 	CASE WHEN s.lifecycle = 'pending' THEN 'pending' END,
 	CASE WHEN s.lifecycle = 'fulfill_failed' THEN 'fulfill_failed' END,
 	CASE WHEN s.lifecycle = 'retained' OR (s.lifecycle = 'active' AND s.expires_at <= $1) THEN 'expired' END,
-	CASE WHEN s.lifecycle IN ('active', 'retained') AND s.used_bytes_total >= s.entitled_bytes_total THEN 'traffic_exhausted' END,
-	CASE WHEN EXISTS (SELECT 1 FROM tasks t WHERE t.subscription_id = s.id AND t.state IN ('queued', 'running') AND t.kind <> 'fulfill')
+	CASE WHEN s.kind = 'direct' AND s.lifecycle = 'active' AND COALESCE((` + kernel.PaidUntilSQL + `) <= $1, true)
+	     THEN 'no_paid_subscription' END,
+	CASE WHEN s.kind = 'isp' AND s.lifecycle IN ('active', 'retained') AND s.used_bytes_total >= s.entitled_bytes_total
+	     THEN 'traffic_exhausted' END,
+	CASE WHEN EXISTS (SELECT 1 FROM tasks t WHERE t.subscription_id = s.id AND t.state IN ('queued', 'running')
+	       AND t.kind NOT IN ('fulfill', 'direct_grant'))
 	     THEN 'changing' END,
 	CASE WHEN s.lifecycle IN ('active', 'retained') AND (n.status = 'disabled' OR EXISTS (
 	       SELECT 1 FROM exit_bindings b WHERE b.id = s.current_exit_id AND b.check_result = 'failed')) THEN 'dataplane' END
@@ -36,9 +41,11 @@ const blockersSQL = `ARRAY_REMOVE(ARRAY[
 // baseSQL 选出视图所需的订阅列；外层可包一层 SELECT … FROM (baseSQL) v WHERE … 做筛选。
 const baseSQL = `SELECT s.id AS id, s.user_id AS user_id, u.email AS email, u.status AS user_status, s.name AS name,
 	s.lifecycle AS lifecycle, s.lifecycle_reason AS lifecycle_reason, s.node_id AS node_id, n.status AS node_status,
-	n.public_host AS node_host, s.plan_id AS plan_id, s.plan_version_id AS plan_version_id, pv.version AS plan_version,
-	pv.name AS plan_name, pv.country_code AS cc, pv.country_name AS country, pv.city AS city, pv.concurrency AS concurrency,
-	pv.bandwidth_mbps AS bandwidth, s.admin_paused AS admin_paused, s.paused_reason AS paused_reason,
+	n.public_host AS node_host, s.kind AS kind, COALESCE(s.plan_id, '') AS plan_id,
+	COALESCE(s.plan_version_id, '') AS plan_version_id, COALESCE(pv.version, 0) AS plan_version, COALESCE(pv.name, '') AS plan_name,
+	COALESCE(pv.country_code, '') AS cc, COALESCE(pv.country_name, '') AS country, COALESCE(pv.city, '') AS city,
+	COALESCE(pv.concurrency, s.direct_max_conns) AS concurrency, COALESCE(pv.bandwidth_mbps, s.direct_bandwidth_mbps) AS bandwidth,
+	CASE WHEN s.kind = 'direct' THEN (` + kernel.PaidUntilSQL + ` AND p.expires_at > $1) END AS paid_until, s.admin_paused AS admin_paused, s.paused_reason AS paused_reason,
 	s.entitled_bytes_total AS entitled_bytes, s.used_bytes_total AS used_bytes, s.entitled_seconds_total AS entitled_secs,
 	s.seconds_before_period AS before_secs, s.first_ready_at AS first_ready_at, s.period_started_at AS period_started_at,
 	s.expires_at AS expires_at, s.retention_ends_at AS retention_ends_at, s.released_at AS released_at, s.deleted_at AS deleted_at,
@@ -49,11 +56,11 @@ const baseSQL = `SELECT s.id AS id, s.user_id AS user_id, u.email AS email, u.st
 	(SELECT e.id FROM exit_requests e WHERE e.subscription_id = s.id AND e.status IN ('pending', 'processing') LIMIT 1) AS open_exit_request,
 	ARRAY(SELECT o.id FROM orders o WHERE o.subscription_id = s.id AND o.payment_status = 'awaiting' ORDER BY o.created_at, o.id) AS open_orders,
 	` + blockersSQL + ` AS blockers
-	FROM subscriptions s JOIN users u ON u.id = s.user_id JOIN plan_versions pv ON pv.id = s.plan_version_id
+	FROM subscriptions s JOIN users u ON u.id = s.user_id LEFT JOIN plan_versions pv ON pv.id = s.plan_version_id
 	LEFT JOIN nodes n ON n.id = s.node_id`
 
-const outerCols = `id, user_id, email, user_status, name, lifecycle, lifecycle_reason, node_id, node_status, node_host, plan_id,
-	plan_version_id, plan_version, plan_name, cc, country, city, concurrency, bandwidth, admin_paused, paused_reason, entitled_bytes,
+const outerCols = `id, user_id, email, user_status, name, lifecycle, lifecycle_reason, node_id, node_status, node_host, kind, plan_id,
+	plan_version_id, plan_version, plan_name, cc, country, city, concurrency, bandwidth, paid_until, admin_paused, paused_reason, entitled_bytes,
 	used_bytes, entitled_secs, before_secs, first_ready_at, period_started_at, expires_at, retention_ends_at, released_at, deleted_at,
 	cur_access, cur_exit, desired_version, applied_version, active_conns, usage_reported_at, rules_version, created_from_order,
 	created_at, active_task, open_exit_request, open_orders, blockers`
@@ -61,10 +68,11 @@ const outerCols = `id, user_id, email, user_status, name, lifecycle, lifecycle_r
 type row struct {
 	ID, UserID, Email, UserStatus, Name, Lifecycle     string
 	LifecycleReason, NodeID, NodeStatus, NodeHost      *string
-	PlanID, PlanVersionID                              string
+	Kind, PlanID, PlanVersionID                        string
 	PlanVersion                                        int
 	PlanName, CC, Country, City                        string
 	Concurrency, Bandwidth                             int
+	PaidUntil                                          *time.Time
 	AdminPaused                                        bool
 	PausedReason                                       *string
 	EntitledBytes, UsedBytes, EntitledSecs, BeforeSecs int64
@@ -84,8 +92,8 @@ type row struct {
 func scanRow(r interface{ Scan(...any) error }) (*row, error) {
 	x := &row{}
 	err := r.Scan(&x.ID, &x.UserID, &x.Email, &x.UserStatus, &x.Name, &x.Lifecycle, &x.LifecycleReason, &x.NodeID, &x.NodeStatus,
-		&x.NodeHost, &x.PlanID, &x.PlanVersionID, &x.PlanVersion, &x.PlanName, &x.CC, &x.Country, &x.City, &x.Concurrency, &x.Bandwidth,
-		&x.AdminPaused, &x.PausedReason, &x.EntitledBytes, &x.UsedBytes, &x.EntitledSecs, &x.BeforeSecs, &x.FirstReady,
+		&x.NodeHost, &x.Kind, &x.PlanID, &x.PlanVersionID, &x.PlanVersion, &x.PlanName, &x.CC, &x.Country, &x.City, &x.Concurrency,
+		&x.Bandwidth, &x.PaidUntil, &x.AdminPaused, &x.PausedReason, &x.EntitledBytes, &x.UsedBytes, &x.EntitledSecs, &x.BeforeSecs, &x.FirstReady,
 		&x.PeriodStarted, &x.Expires, &x.RetentionEnds, &x.Released, &x.Deleted, &x.CurAccess, &x.CurExit, &x.DesiredV, &x.AppliedV,
 		&x.ActiveConns, &x.UsageReportedAt, &x.RulesVersion, &x.CreatedFromOrder, &x.CreatedAt, &x.ActiveTask, &x.OpenExitReq,
 		&x.OpenOrders, &x.Blockers)
@@ -169,11 +177,21 @@ type Access struct {
 	UnseenChanges []string  `json:"unseenChanges"`
 }
 
+// Direct 是 OpenAPI SubscriptionDirect（直出代理，D-25）。
+type Direct struct {
+	BandwidthMbps  int `json:"bandwidthMbps"`
+	MaxConnections int `json:"maxConnections"`
+	// PaidUntil 是可用截止：该用户时长有效的 ISP 订阅中最晚的到期时间；没有时为 null（阻断原因 no_paid_subscription）。
+	PaidUntil *time.Time `json:"paidUntil"`
+}
+
 // View 是 OpenAPI Subscription。
 type View struct {
 	ID                string      `json:"id"`
 	Name              string      `json:"name"`
-	Plan              Plan        `json:"plan"`
+	Kind              string      `json:"kind"`
+	Plan              *Plan       `json:"plan"`
+	Direct            *Direct     `json:"direct"`
 	Lifecycle         string      `json:"lifecycle"`
 	Blockers          []string    `json:"blockers"`
 	Time              Time        `json:"time"`
@@ -185,11 +203,32 @@ type View struct {
 	OpenOrderIDs      []string    `json:"openOrderIds"`
 }
 
-func (x *row) plan() Plan {
-	return Plan{Name: x.PlanName, CountryCode: x.CC, Country: x.Country, City: x.City, Concurrency: x.Concurrency, BandwidthMbps: x.Bandwidth}
+func (x *row) isDirect() bool { return x.Kind == task.KindDirect }
+
+// plan 是套餐快照；直出订阅没有套餐（null）。
+func (x *row) plan() *Plan {
+	if x.isDirect() {
+		return nil
+	}
+	return &Plan{Name: x.PlanName, CountryCode: x.CC, Country: x.Country, City: x.City, Concurrency: x.Concurrency, BandwidthMbps: x.Bandwidth}
 }
 
+func (x *row) direct() *Direct {
+	if !x.isDirect() {
+		return nil
+	}
+	return &Direct{BandwidthMbps: x.Bandwidth, MaxConnections: x.Concurrency, PaidUntil: kernel.TimePtr(x.PaidUntil)}
+}
+
+// timeView 是时长视图；直出订阅的到期时间即可用截止（跟随付费订阅），没有时长段。
 func (x *row) timeView(now time.Time) Time {
+	if x.isDirect() {
+		t := Time{StartedAt: kernel.TimePtr(x.FirstReady), ExpiresAt: kernel.TimePtr(x.PaidUntil)}
+		if x.PaidUntil != nil && x.PaidUntil.After(now) {
+			t.RemainingSeconds = int64(x.PaidUntil.Sub(now) / time.Second)
+		}
+		return t
+	}
 	t := Time{PeriodDays: x.EntitledSecs / 86400, StartedAt: kernel.TimePtr(x.FirstReady), ExpiresAt: kernel.TimePtr(x.Expires),
 		RetentionEndsAt: kernel.TimePtr(x.RetentionEnds)}
 	switch {
@@ -327,7 +366,7 @@ func (e *exitRow) userView(now time.Time, interval time.Duration) *Exit {
 }
 
 func (s *Service) userView(ctx context.Context, q kernel.Q, now time.Time, x *row) (*View, error) {
-	v := &View{ID: x.ID, Name: x.Name, Plan: x.plan(), Lifecycle: x.Lifecycle, Blockers: x.Blockers, Time: x.timeView(now),
+	v := &View{ID: x.ID, Name: x.Name, Kind: x.Kind, Plan: x.plan(), Direct: x.direct(), Lifecycle: x.Lifecycle, Blockers: x.Blockers, Time: x.timeView(now),
 		Traffic: Traffic{TotalBytes: x.EntitledBytes, UsedBytes: x.UsedBytes}, OpenExitRequestID: x.OpenExitReq, OpenOrderIDs: x.OpenOrders}
 	e, err := displayExit(ctx, q, x)
 	if err != nil {
@@ -412,9 +451,11 @@ type AdminAccess struct {
 type AdminView struct {
 	ID                string         `json:"id"`
 	Name              string         `json:"name"`
+	Kind              string         `json:"kind"`
 	User              kernel.UserRef `json:"user"`
 	NodeID            *string        `json:"nodeId"`
-	Plan              AdminPlan      `json:"plan"`
+	Plan              *AdminPlan     `json:"plan"`
+	Direct            *Direct        `json:"direct"`
 	Lifecycle         string         `json:"lifecycle"`
 	Blockers          []string       `json:"blockers"`
 	AdminPaused       bool           `json:"adminPaused"`
@@ -458,13 +499,15 @@ func (e *exitRow) adminView(now time.Time, interval time.Duration) *AdminExit {
 }
 
 func (s *Service) adminView(ctx context.Context, q kernel.Q, now time.Time, x *row) (*AdminView, error) {
-	v := &AdminView{ID: x.ID, Name: x.Name, User: kernel.UserRef{ID: x.UserID, Email: x.Email}, NodeID: x.NodeID,
-		Plan:      AdminPlan{Plan: x.plan(), PlanID: x.PlanID, PlanVersionID: x.PlanVersionID, PlanVersion: x.PlanVersion},
-		Lifecycle: x.Lifecycle, Blockers: x.Blockers, AdminPaused: x.AdminPaused, PausedReason: x.PausedReason, Time: x.timeView(now),
+	v := &AdminView{ID: x.ID, Name: x.Name, Kind: x.Kind, User: kernel.UserRef{ID: x.UserID, Email: x.Email}, NodeID: x.NodeID,
+		Direct: x.direct(), Lifecycle: x.Lifecycle, Blockers: x.Blockers, AdminPaused: x.AdminPaused, PausedReason: x.PausedReason, Time: x.timeView(now),
 		Traffic: AdminTraffic{Traffic: Traffic{TotalBytes: x.EntitledBytes, UsedBytes: x.UsedBytes},
 			RemainingBytes: max(0, x.EntitledBytes-x.UsedBytes)},
 		UsageReportedAt: kernel.TimePtr(x.UsageReportedAt), DesiredVersion: x.DesiredV, AppliedVersion: x.AppliedV,
 		ActiveTaskID: x.ActiveTask, OpenExitRequestID: x.OpenExitReq, OpenOrderIDs: x.OpenOrders, CreatedAt: x.CreatedAt.UTC()}
+	if p := x.plan(); p != nil {
+		v.Plan = &AdminPlan{Plan: *p, PlanID: x.PlanID, PlanVersionID: x.PlanVersionID, PlanVersion: x.PlanVersion}
+	}
 	if x.UsageReportedAt != nil && now.Sub(*x.UsageReportedAt) <= s.env.Cfg.FreshWindow {
 		v.ActiveConns = kernel.Ptr(x.ActiveConns)
 	}
@@ -586,6 +629,9 @@ func (s *Service) AdminList(ctx context.Context, f ListFilter) (*kernel.Page[Adm
 	if f.NodeID != "" {
 		a.Add("node_id = ?", f.NodeID)
 	}
+	if f.Kind != "" {
+		a.Add("kind = ?", f.Kind)
+	}
 	if len(f.Lifecycle) > 0 {
 		a.Add("lifecycle = ANY(?)", f.Lifecycle)
 	} else {
@@ -634,12 +680,12 @@ func (s *Service) AdminList(ctx context.Context, f ListFilter) (*kernel.Page[Adm
 
 // ListFilter 是管理端订阅列表的筛选条件。
 type ListFilter struct {
-	Q, UserID, NodeID, Blocker string
-	Lifecycle                  []string
-	Usable                     *bool
-	ExpiresBefore              *time.Time
-	Cursor                     *kernel.Cursor
-	Limit                      int
+	Q, UserID, NodeID, Blocker, Kind string
+	Lifecycle                        []string
+	Usable                           *bool
+	ExpiresBefore                    *time.Time
+	Cursor                           *kernel.Cursor
+	Limit                            int
 }
 
 // UserSubscriptions 是管理端用户详情的订阅列表（平台 admin.Hooks.UserSubscriptions）。

@@ -10,6 +10,7 @@ import { Plate, fmtDateTime, fmtMoney } from '@isp/ui'
 import { qk, useApi } from '../app/api'
 import { Ago, Callout, Cell, Facts, LoadError, Loading, Mono, PageHead, State } from '../components/bits'
 import { ConfirmAction } from '../components/ConfirmAction'
+import { DirectGrant } from '../components/DirectGrant'
 import { subColumns } from '../components/subCells'
 import { FULFILLMENT, ORDER_KIND, PAYMENT, userState } from '../lib/status'
 
@@ -78,6 +79,7 @@ export default function UserDetailPage() {
             />
           </div>
         </Plate>
+        <DirectGrant user={u} />
         <Plate title={`订阅（${u.subscriptions.length}）`}>
           <Table
             className="plain-table"

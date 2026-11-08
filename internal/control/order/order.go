@@ -133,15 +133,21 @@ func (s *Service) Create(ctx context.Context, tx *kernel.Tx, userID string, in I
 		if in.SubscriptionID == "" {
 			return "", httpx.Invalid("subscriptionId 必填")
 		}
-		var owner, lifecycle, subPlan string
+		var owner, lifecycle string
+		var planOf *string
 		err := tx.QueryRow(ctx, `SELECT user_id, lifecycle, plan_id FROM subscriptions WHERE id = $1 FOR UPDATE`, in.SubscriptionID).
-			Scan(&owner, &lifecycle, &subPlan)
+			Scan(&owner, &lifecycle, &planOf)
 		if kernel.IsNoRows(err) || (err == nil && (owner != userID || lifecycle == "deleted")) {
 			return "", httpx.NotFound("没有找到这个订阅")
 		}
 		if err != nil {
 			return "", err
 		}
+		if planOf == nil {
+			// 直出代理（D-25）没有套餐：不限流量、跟随付费订阅有效。
+			return "", httpx.Precondition("直出代理跟随你的付费 IP 有效且不限流量，不能续时长或加流量")
+		}
+		subPlan := *planOf
 		subID = &in.SubscriptionID
 		if in.Kind == "renew_time" {
 			if lifecycle != "active" && lifecycle != "retained" && lifecycle != "released" {

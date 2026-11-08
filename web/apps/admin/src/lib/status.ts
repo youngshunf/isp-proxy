@@ -32,6 +32,7 @@ export const BLOCKER: Map<Blocker> = {
   pending: { label: '待履约', tone: 'wait', shape: 'half' },
   fulfill_failed: { label: '履约异常', tone: 'stop', shape: 'hollow' },
   expired: { label: '已到期', tone: 'stop', shape: 'hollow' },
+  no_paid_subscription: { label: '无付费订阅', tone: 'stop', shape: 'hollow' },
   traffic_exhausted: { label: '流量耗尽', tone: 'stop', shape: 'hollow' },
   changing: { label: '变更中', tone: 'wait', shape: 'half' },
   dataplane: { label: '数据面异常', tone: 'warn', shape: 'hollow' },
@@ -98,6 +99,7 @@ export const TASK_KIND: Record<TaskKind, string> = {
   exit_change: '换出口',
   combined: '组合更换',
   fulfill: '开通',
+  direct_grant: '赠送直出',
 }
 
 export const TASK_STATE: Map<TaskState> = {

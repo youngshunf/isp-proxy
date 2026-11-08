@@ -151,15 +151,30 @@ type exitChain struct {
 	inner atomic.Pointer[chainHolder]
 }
 
+// chainHolder 是接入当前的出站方式：经 ISP 上游（c 非空），或服务器直出（direct，D-25）。
+// 两者只能有其一；holder 为空表示没有出口（失败即拒绝）。直出只能由显式的 directHolder 构造，
+// 任何“链缺失、路由为空、节点为空”的情况都不会落到直出分支。
 type chainHolder struct {
-	c    chain.Chainer
-	exit Exit
+	c      chain.Chainer
+	exit   Exit
+	direct bool
 }
+
+// directHolder 是服务器直出（D-25）的出站方式。
+func directHolder() *chainHolder { return &chainHolder{direct: true} }
 
 func (e *exitChain) Route(ctx context.Context, network, address string, opts ...chain.RouteOption) chain.Route {
 	h := e.inner.Load()
 	if h == nil {
 		return failRoute{}
+	}
+	if h.direct {
+		// 直出：经节点本机拨号。认证检查与 ISP 出口相同；出站策略（另封 465、587）在 Dial 时
+		// 解析一次并按解析结果拨号（directRoute），不在这里提前解析，避免两次解析之间结果变化。
+		if c := connFromContext(ctx); c == nil || !c.authed.Load() {
+			return failRoute{err: ErrNotAuthenticated}
+		}
+		return directRoute{a: e.a}
 	}
 	// address 是路由器解析后的地址；节点未配置解析器时仍是主机名，由策略自行解析。
 	if err := e.a.egressPolicy().Check(ctx, network, address); err != nil {
@@ -187,6 +202,47 @@ func (e *exitChain) current() Exit {
 	}
 	return Exit{}
 }
+
+// directRoute 是服务器直出的路由（D-25）：由节点本机连接目标。只有期望状态显式标记直出的订阅才会得到它
+// （chainHolder.direct），与 GOST 的 DefaultRoute（链缺失时的直连回退）无关，后者仍被 exitChain 拦截为失败。
+//
+// 拨号前按直出策略检查目标（EgressPolicy.resolveDirect：25、465、587、私网、环回、元数据照封），
+// 主机名只解析一次并按结果拨号。只支持 TCP；BIND 一律拒绝（接入服务也已关闭 BIND 与 UDP）。
+type directRoute struct{ a *Agent }
+
+// ErrDirectNetwork 表示直出不支持的网络类型（只支持 TCP）。
+var ErrDirectNetwork = errors.New("agent: direct egress supports tcp only")
+
+func (d directRoute) Dial(ctx context.Context, network, address string, _ ...chain.DialOption) (net.Conn, error) {
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+	default:
+		return nil, ErrDirectNetwork
+	}
+	addrs, err := d.a.egressPolicy().resolveDirect(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+	var dialer net.Dialer
+	var last error
+	for _, ap := range addrs {
+		c, err := dialer.DialContext(ctx, "tcp", ap.String())
+		if err == nil {
+			return c, nil
+		}
+		last = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, last
+}
+
+func (directRoute) Bind(context.Context, string, string, ...chain.BindOption) (net.Listener, error) {
+	return nil, ErrDirectNetwork
+}
+
+func (directRoute) Nodes() []*chain.Node { return nil }
 
 // failRoute 是必然失败的路由；err 为空时为 ErrNoExit。
 type failRoute struct{ err error }
@@ -293,6 +349,7 @@ func serviceNames(subID string, ver uint64) []string {
 // ApplyAccess 为订阅签发新接入版本并撤销旧版本（换接入）。
 // exit 非空时新接入直接绑定新出口（组合更换）；为空时沿用当前出口，没有当前出口时返回 ErrNoExit。
 // 任一步失败时新建对象全部回收，订阅保持原状。
+// 直出订阅（D-25）沿用直出。
 func (a *Agent) ApplyAccess(subID string, acc Access, exit *Exit) error {
 	if exit == nil {
 		a.mu.Lock()
@@ -308,6 +365,9 @@ func (a *Agent) ApplyAccess(subID string, acc Access, exit *Exit) error {
 		if cur == nil {
 			return ErrNoExit
 		}
+		if cur.direct {
+			return a.replaceAccess(subID, acc, directHolder())
+		}
 		e := cur.exit
 		exit = &e
 	}
@@ -316,7 +376,27 @@ func (a *Agent) ApplyAccess(subID string, acc Access, exit *Exit) error {
 
 // ReplaceAccess 与 ApplyAccess 相同，但 exit 为空表示新接入没有出口：服务照常监听与认证，
 // 所有转发失败即拒绝（期望状态中 access 非空、exit 为空，docs/06 §8.3）。供节点运行时声明式对账使用。
+// exit 为空绝不意味着直出：直出只能经 ReplaceAccessDirect 显式建立（R-01.3）。
 func (a *Agent) ReplaceAccess(subID string, acc Access, exit *Exit) error {
+	var h *chainHolder
+	if exit != nil {
+		inner, err := buildChain(fmt.Sprintf("exit-%s-a%d", subID, acc.Version), *exit)
+		if err != nil {
+			return err
+		}
+		h = &chainHolder{c: inner, exit: *exit}
+	}
+	return a.replaceAccess(subID, acc, h)
+}
+
+// ReplaceAccessDirect 为直出订阅（D-25）签发新接入版本并撤销旧版本：新接入经节点本机拨号访问目标
+// （directRoute，出站策略另封 465、587）。只用于期望状态显式标记直出的订阅。
+func (a *Agent) ReplaceAccessDirect(subID string, acc Access) error {
+	return a.replaceAccess(subID, acc, directHolder())
+}
+
+// replaceAccess 是换接入的实现；h 是新接入的出站方式（nil 为没有出口，失败即拒绝）。
+func (a *Agent) replaceAccess(subID string, acc Access, h *chainHolder) error {
 	a.mu.Lock()
 	s := a.subs[subID]
 	if s == nil {
@@ -331,12 +411,8 @@ func (a *Agent) ReplaceAccess(subID string, acc Access, exit *Exit) error {
 
 	chainName := fmt.Sprintf("exit-%s-a%d", subID, acc.Version)
 	ec := &exitChain{a: a}
-	if exit != nil {
-		inner, err := buildChain(chainName, *exit)
-		if err != nil {
-			return err
-		}
-		ec.inner.Store(&chainHolder{c: inner, exit: *exit})
+	if h != nil {
+		ec.inner.Store(h)
 	}
 	if err := registry.ChainRegistry().Register(chainName, ec); err != nil {
 		return err
@@ -502,6 +578,33 @@ func (a *Agent) ApplyExit(subID string, e Exit) error {
 	return nil
 }
 
+// ApplyDirect 把订阅当前接入改为服务器直出（D-25；期望状态中 direct 由 false 变为 true），并关闭存量连接。
+func (a *Agent) ApplyDirect(subID string) error {
+	a.mu.Lock()
+	s := a.subs[subID]
+	if s == nil || s.exit == nil || s.access == nil {
+		a.mu.Unlock()
+		return ErrUnknownSubscription
+	}
+	ec := s.exit
+	a.mu.Unlock()
+	ec.inner.Store(directHolder())
+	a.kick(s)
+	return nil
+}
+
+// IsDirect 报告订阅当前接入是否为服务器直出。
+func (a *Agent) IsDirect(subID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := a.subs[subID]
+	if s == nil || s.exit == nil {
+		return false
+	}
+	h := s.exit.inner.Load()
+	return h != nil && h.direct
+}
+
 // ClearExit 移除订阅当前接入的出口（期望状态中 exit 为空）：此后全部转发失败即拒绝，
 // 不会退化为直连；存量连接随即关闭。
 func (a *Agent) ClearExit(subID string) error {
@@ -518,7 +621,7 @@ func (a *Agent) ClearExit(subID string) error {
 	return nil
 }
 
-// CurrentExit 返回订阅当前出口；没有接入或没有出口时 ok 为 false。
+// CurrentExit 返回订阅当前出口；没有接入、没有出口或为直出时 ok 为 false。
 func (a *Agent) CurrentExit(subID string) (Exit, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -527,7 +630,7 @@ func (a *Agent) CurrentExit(subID string) (Exit, bool) {
 		return Exit{}, false
 	}
 	h := s.exit.inner.Load()
-	if h == nil {
+	if h == nil || h.direct {
 		return Exit{}, false
 	}
 	return h.exit, true

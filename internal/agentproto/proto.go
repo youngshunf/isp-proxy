@@ -92,6 +92,13 @@ type SubscriptionEntry struct {
 	Access *Access `json:"access"`
 	// Exit 是当前出口；nil 表示没有出口，所有连接失败即拒绝（不得直连，R-01.3）。
 	Exit *Exit `json:"exit"`
+	// Direct 显式标记“服务器直出代理”（D-25，docs/06 §9.2）：只有为 true 的条目经节点本机拨号访问目标
+	// （仍经出站策略，另封 465、587）。为 true 时 Exit 必须为空。为 false 且 Exit 为空的条目照旧失败即拒绝，
+	// 不得因为本字段的存在而退化为直连（R-01.3）。可选字段，旧 agent 忽略它时直出订阅只会失败即拒绝。
+	Direct bool `json:"direct,omitempty"`
+	// Unmetered 显式标记“不限流量”（D-25）：agent 不做额度耗尽停用，EntitledTotal 被忽略；仍计量、仍上报累计用量。
+	// 期限、启用、并发与带宽上限照常执行。可选字段，旧 agent 忽略它时按 EntitledTotal（直出为 0）拒绝，不会放开额度。
+	Unmetered bool `json:"unmetered,omitempty"`
 }
 
 // Access 是一个接入版本：三个协议端口加一组连接凭据（R-04.2）。
@@ -255,6 +262,9 @@ func (d *Desired) Validate() error {
 			}
 		}
 		if e.Exit != nil {
+			if e.Direct {
+				return fmt.Errorf("订阅 %s: 直出订阅不能带上游出口", e.ID)
+			}
 			if err := e.Exit.validate(); err != nil {
 				return fmt.Errorf("订阅 %s: %w", e.ID, err)
 			}

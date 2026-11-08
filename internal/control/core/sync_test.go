@@ -722,7 +722,7 @@ func TestCoreRoutesAreContractMinusPlatform(t *testing.T) {
 		rest = append(rest, p)
 	}
 	sort.Strings(rest)
-	if len(mine) != 77 || len(rest) != 21 {
+	if len(mine) != 79 || len(rest) != 21 { // 内核含直出代理赠送与收回（D-25）
 		t.Fatalf("内核 %d、平台 %d: %v", len(mine), len(rest), rest)
 	}
 }

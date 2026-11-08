@@ -70,7 +70,11 @@ export default function SubscriptionDetailPage() {
     }
   }
 
-  const more = [
+  const direct = s.kind === 'direct'
+  // 直出代理（D-25）不入账、不划转、不在这里删除（到用户详情收回赠送），开通失败也在用户详情重新赠送。
+  const more = direct
+    ? []
+    : [
     { key: 'ledger', icon: <WalletOutlined />, label: '账本入账（调整 / 赠送 / 补偿）', disabled: s.lifecycle === 'deleted' },
     { key: 'transfer', icon: <TransactionOutlined />, label: '划转剩余流量到同一用户的其他订阅', disabled: s.traffic.remainingBytes <= 0 },
     { key: 'retry', icon: <RedoOutlined />, label: '重试开通', disabled: !(s.lifecycle === 'fulfill_failed' || s.lifecycle === 'pending') || !!s.activeTask },
@@ -110,11 +114,18 @@ export default function SubscriptionDetailPage() {
             <Button icon={<KeyOutlined />} onClick={() => setDialog('access')} disabled={!live || !s.access || !!s.activeTask}>
               换接入
             </Button>
-            <Link to={`/subscriptions/${s.id}/exit-change`}>
-              <Button type="primary" icon={<SwapOutlined />} disabled={!live || !!s.activeTask}>
-                换出口
-              </Button>
-            </Link>
+            {direct ? (
+              <Link to={`/users/${s.user.id}`}>
+                <Button>在用户详情管理直出</Button>
+              </Link>
+            ) : (
+              <Link to={`/subscriptions/${s.id}/exit-change`}>
+                <Button type="primary" icon={<SwapOutlined />} disabled={!live || !!s.activeTask}>
+                  换出口
+                </Button>
+              </Link>
+            )}
+            {more.length > 0 && (
             <Dropdown
               menu={{
                 items: more,
@@ -124,6 +135,7 @@ export default function SubscriptionDetailPage() {
             >
               <Button>更多</Button>
             </Dropdown>
+            )}
           </>
         }
       />
@@ -149,6 +161,21 @@ export default function SubscriptionDetailPage() {
         <div className="grid-5-7">
           <Plate title="余量" extra={<span className="muted small">以账本为准</span>}>
             <div className="plate-pad stack" style={{ gap: 18 }}>
+              {!s.plan ? (
+                <Facts
+                  items={[
+                    ['类型', '服务器直出（管理员赠送）'],
+                    ['规格', `${s.direct?.maxConnections} 并发 · ${s.direct?.bandwidthMbps} Mbps · 不限流量`],
+                    ['可用截止', s.direct?.paidUntil ? `跟随付费订阅，至 ${fmtDateTime(s.direct.paidUntil)}` : '没有时长有效的付费订阅'],
+                    ['累计用量', fmtBytes(s.traffic.usedBytes)],
+                    ['生命周期', LIFECYCLE[s.lifecycle]],
+                    ['首次可用', s.firstReadyAt ? fmtDateTime(s.firstReadyAt) : null],
+                    ['规则版本', <Mono key="r">{s.rulesVersion}</Mono>],
+                    ['自助换接入', `今日剩 ${s.quotas.accessChangesLeft} / ${s.quotas.accessChangesPerDay} 次`],
+                  ]}
+                />
+              ) : (
+                <>
               <div className="sub-meters">
                 <TimeMeter s={s} />
                 <TrafficMeter s={s} />
@@ -172,6 +199,8 @@ export default function SubscriptionDetailPage() {
                   ['来源订单', s.createdFromOrderId ? <Link key="o" to={`/orders/${s.createdFromOrderId}`}>查看订单</Link> : null],
                 ]}
               />
+                </>
+              )}
             </div>
           </Plate>
 
@@ -204,6 +233,8 @@ export default function SubscriptionDetailPage() {
                       ['节点', node ? `${node.name}${node.online ? '' : '（离线）'}` : s.nodeId],
                     ]}
                   />
+                ) : direct ? (
+                  <p className="muted">服务器直出：经节点自身地址出站，不经 ISP 上游，没有出口资源。</p>
                 ) : (
                   <p className="muted">没有绑定出口（{LIFECYCLE[s.lifecycle]}）。</p>
                 )}

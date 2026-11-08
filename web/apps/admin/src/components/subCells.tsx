@@ -25,7 +25,25 @@ export function SubStateCell({ s }: { s: AdminSubscription }) {
   )
 }
 
+/** 直出代理（D-25）的标记：单色文字标签，不用国旗（没有出口国家）。 */
+export function DirectTag() {
+  return <span className="version-chip" title="服务器直出（管理员赠送）">直出</span>
+}
+
 export function PlanCell({ s }: { s: AdminSubscription }) {
+  if (!s.plan) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <DirectTag />
+        <span className="cell-stack">
+          <span>服务器直出</span>
+          <span className="muted">
+            {s.direct?.maxConnections} 并发 · {s.direct?.bandwidthMbps} Mbps · 不限流量
+          </span>
+        </span>
+      </span>
+    )
+  }
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
       <CountryFlag code={s.plan.countryCode} name={s.plan.country} size="sm" />
@@ -42,6 +60,7 @@ export function PlanCell({ s }: { s: AdminSubscription }) {
 }
 
 export function ExitCell({ s }: { s: AdminSubscription }) {
+  if (s.kind === 'direct') return <span className="muted">服务器自身地址</span>
   if (!s.exit) return <span className="muted">未绑定</span>
   const ip = s.exit.verifiedIp ?? s.exit.ip
   return (
@@ -53,6 +72,13 @@ export function ExitCell({ s }: { s: AdminSubscription }) {
 }
 
 export function TrafficCell({ s }: { s: AdminSubscription }) {
+  if (s.kind === 'direct')
+    return (
+      <div className="cell-stack num">
+        <span>不限流量</span>
+        <span className="muted">累计 {fmtBytes(s.traffic.usedBytes)}</span>
+      </div>
+    )
   const { remainingBytes, totalBytes } = s.traffic
   const low = totalBytes > 0 && remainingBytes / totalBytes < 0.1
   return (
@@ -64,6 +90,17 @@ export function TrafficCell({ s }: { s: AdminSubscription }) {
 }
 
 export function ExpiryCell({ s }: { s: AdminSubscription }) {
+  if (s.kind === 'direct') {
+    const until = s.direct?.paidUntil
+    return until ? (
+      <div className="cell-stack num">
+        <span>{fmtDate(until)}</span>
+        <span className="muted">跟随付费订阅</span>
+      </div>
+    ) : (
+      <span className="state tone-stop">无付费订阅</span>
+    )
+  }
   if (!s.time.expiresAt) return <span className="muted">未开始</span>
   return (
     <div className="cell-stack num">

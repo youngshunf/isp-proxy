@@ -74,6 +74,10 @@ type Config struct {
 	SchedulerInterval time.Duration
 	// UsageRetention 趋势样本保留期（D-07，90 天）。
 	UsageRetention time.Duration
+	// DirectDefaultBandwidthMbps 是赠送直出代理时未填带宽上限的默认值（D-25，docs/06 §9.2，默认 10）。
+	DirectDefaultBandwidthMbps int
+	// DirectMaxConnections 是直出代理的并发连接上限（D-25，默认 64）。
+	DirectMaxConnections int
 }
 
 // GeoLookup 按 IP 解析 ISO 3166-1 alpha-2 国家代码（大小写不限）。未知时 ok = false。
@@ -113,6 +117,12 @@ func (c Config) withDefaults() Config {
 	}
 	if c.StockLowThreshold <= 0 {
 		c.StockLowThreshold = 3
+	}
+	if c.DirectDefaultBandwidthMbps <= 0 {
+		c.DirectDefaultBandwidthMbps = 10
+	}
+	if c.DirectMaxConnections <= 0 {
+		c.DirectMaxConnections = 64
 	}
 	if c.PortPoolLowRatio <= 0 {
 		c.PortPoolLowRatio = 0.1
@@ -190,11 +200,43 @@ func (t *Tx) BumpNode(ctx context.Context, nodeID string) error {
 }
 
 // BumpSub 提升订阅条目版本（接入、出口、额度、期限、启用任一变化），并提升其节点修订号。
+//
+// ISP 订阅变化时同时提升该用户直出订阅（D-25）的版本：直出的可用截止 = 该用户时长有效的 ISP 订阅中最晚的
+// 到期时间，在生成期望状态时计算，任何 ISP 订阅的开通、续时长、到期、释放、删除都可能改变它。多提升一次
+// 无害（节点按相同内容对账，不断开连接）。
 func (t *Tx) BumpSub(ctx context.Context, subID string) error {
 	var node *string
+	var user, kind string
 	if err := t.QueryRow(ctx, `UPDATE subscriptions SET desired_version = desired_version + 1, row_version = row_version + 1
-	                             WHERE id = $1 RETURNING node_id`, subID).Scan(&node); err != nil {
+	                             WHERE id = $1 RETURNING node_id, user_id, kind`, subID).Scan(&node, &user, &kind); err != nil {
 		return fmt.Errorf("提升订阅版本: %w", err)
+	}
+	if node != nil {
+		if err := t.BumpNode(ctx, *node); err != nil {
+			return err
+		}
+	}
+	if kind == "isp" {
+		return t.BumpDirectOf(ctx, user)
+	}
+	return nil
+}
+
+// PaidUntilSQL 是直出订阅（别名 s）的付费截止子查询（D-25）：同一用户已开始、未删除的 ISP 订阅中最晚的
+// 到期时间；没有则为 NULL。已过去的到期时间同样参与：期望状态据此让节点判定已到期，视图与阻断原因再与当前时间比较。
+const PaidUntilSQL = `SELECT max(p.expires_at) FROM subscriptions p WHERE p.user_id = s.user_id AND p.kind = 'isp'
+	AND p.lifecycle <> 'deleted' AND p.period_started_at IS NOT NULL`
+
+// BumpDirectOf 提升用户未删除的直出订阅（D-25）的期望版本；没有直出订阅时什么也不做。
+func (t *Tx) BumpDirectOf(ctx context.Context, userID string) error {
+	var node *string
+	err := t.QueryRow(ctx, `UPDATE subscriptions SET desired_version = desired_version + 1, row_version = row_version + 1
+	                         WHERE user_id = $1 AND kind = 'direct' AND lifecycle <> 'deleted' RETURNING node_id`, userID).Scan(&node)
+	if IsNoRows(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("提升直出订阅版本: %w", err)
 	}
 	if node != nil {
 		return t.BumpNode(ctx, *node)

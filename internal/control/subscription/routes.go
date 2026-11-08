@@ -27,12 +27,12 @@ func (s *Service) adminDetailTx(r *http.Request, id string, fn func(tx *kernel.T
 	return d, err
 }
 
-// Routes 返回订阅相关路由（用户端 6 个、管理端 13 个；代建订阅在 order 包，任务与探测在 task / probe 包）。
+// Routes 返回订阅相关路由（用户端 6 个、管理端 15 个，含用户详情里的直出代理赠送与收回；代建订阅在 order 包，任务与探测在 task / probe 包）。
 func (s *Service) Routes() []httpx.Route {
 	type up = httpx.Principal
 	type ap = httpx.AdminPrincipal
 	sid := func(r *http.Request) string { return r.PathValue("subscriptionId") }
-	return []httpx.Route{
+	return append(s.directRoutes(), []httpx.Route{
 		// ---- 用户端 ----
 		{Method: "GET", Pattern: "/api/subscriptions", Auth: httpx.VerifiedUser, Handler: kernel.UserH(func(r *http.Request, p up) (int, any, error) {
 			v, err := s.ListForUser(r.Context(), p.UserID)
@@ -233,7 +233,7 @@ func (s *Service) Routes() []httpx.Route {
 				})
 			return 201, v, err
 		})},
-	}
+	}...)
 }
 
 func parseFilter(r *http.Request) (ListFilter, error) {
@@ -248,11 +248,18 @@ func parseFilter(r *http.Request) (ListFilter, error) {
 	}
 	if b := q.Get("blocker"); b != "" {
 		switch b {
-		case "account_banned", "released", "admin_paused", "pending", "fulfill_failed", "expired", "traffic_exhausted", "changing", "dataplane":
+		case "account_banned", "released", "admin_paused", "pending", "fulfill_failed", "expired", "no_paid_subscription", "traffic_exhausted", "changing",
+			"dataplane":
 			f.Blocker = b
 		default:
 			return f, httpx.Invalid("blocker 取值不正确")
 		}
+	}
+	switch k := q.Get("kind"); k {
+	case "", "isp", "direct":
+		f.Kind = k
+	default:
+		return f, httpx.Invalid("kind 只能是 isp 或 direct")
 	}
 	if u := q.Get("usable"); u != "" {
 		b, err := strconv.ParseBool(u)

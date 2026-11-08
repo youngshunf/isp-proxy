@@ -129,13 +129,21 @@ func (r *Runtime) applyEntry(cur *agentproto.SubscriptionEntry, e agentproto.Sub
 		if r.certs.Leaf() == nil {
 			return errCertUnavailable
 		}
-		if err := r.agent.ReplaceAccess(id, r.access(e.Access), r.exit(e.Exit)); err != nil {
+		var err error
+		if e.Direct {
+			// 直出订阅（D-25）：只有显式标记直出的条目经本机拨号；未标记且没有出口的条目照旧失败即拒绝。
+			err = r.agent.ReplaceAccessDirect(id, r.access(e.Access))
+		} else {
+			err = r.agent.ReplaceAccess(id, r.access(e.Access), r.exit(e.Exit))
+		}
+		if err != nil {
 			return err
 		}
 
 	default:
 		// 端口不变：先校验出口（唯一可能失败的一步），再原地替换凭据、换出口。
-		exitChanged := !exitEqual(curExit, e.Exit)
+		curDirect := cur != nil && cur.Direct
+		exitChanged := !exitEqual(curExit, e.Exit) || curDirect != e.Direct
 		if exitChanged && e.Exit != nil {
 			if err := agent.ValidateExit(*r.exit(e.Exit)); err != nil {
 				return err
@@ -150,9 +158,12 @@ func (r *Runtime) applyEntry(cur *agentproto.SubscriptionEntry, e agentproto.Sub
 		if exitChanged {
 			// 换出口（docs/04 §4.2）：原子替换链内容并关闭存量连接。
 			var err error
-			if e.Exit == nil {
+			switch {
+			case e.Direct:
+				err = r.agent.ApplyDirect(id)
+			case e.Exit == nil:
 				err = r.agent.ClearExit(id)
-			} else {
+			default:
 				err = r.agent.ApplyExit(id, *r.exit(e.Exit))
 			}
 			if err != nil {
@@ -183,6 +194,7 @@ func subState(e agentproto.SubscriptionEntry) agent.SubState {
 		UsedFloor:     e.UsedFloor,
 		MaxConns:      e.MaxConns,
 		BandwidthBps:  bps,
+		Unmetered:     e.Unmetered,
 	}
 }
 

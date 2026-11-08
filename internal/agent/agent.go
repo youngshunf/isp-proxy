@@ -27,6 +27,10 @@ type SubState struct {
 	// 套餐限制（A-W3），0 表示不限。
 	MaxConns     int   // 同时在线的已认证连接数上限；超出的新连接在认证阶段被拒绝
 	BandwidthBps int64 // 带宽上限（字节/秒），上行与下行各自一份、各自等于该值，由订阅全部连接共享
+
+	// Unmetered 为 true 时不限流量（直出代理，D-25）：EntitledTotal 被忽略，不做额度耗尽停用；
+	// 仍逐字节计量、持久化与上报。期限、启用、并发与带宽上限照常执行。
+	Unmetered bool
 }
 
 // sub 是节点内的订阅运行态。对象一经创建不再替换，连接会持有它。
@@ -37,6 +41,7 @@ type sub struct {
 	used      atomic.Uint64
 	expiresAt atomic.Int64 // UTC 纳秒
 	enabled   atomic.Bool
+	unmetered atomic.Bool // 不限流量（D-25）：只计量，不按额度停用
 
 	maxConns atomic.Int64 // 0 表示不限
 	active   atomic.Int64 // 已认证且未关闭的连接数
@@ -166,6 +171,7 @@ func (a *Agent) Upsert(st SubState) bool {
 	s.entitled.Store(st.EntitledTotal)
 	s.expiresAt.Store(unixNano(st.ExpiresAt))
 	s.enabled.Store(st.Enabled)
+	s.unmetered.Store(st.Unmetered)
 	raiseTo(&s.used, st.UsedFloor)
 	s.maxConns.Store(int64(max(st.MaxConns, 0)))
 	s.up.set(st.BandwidthBps)
@@ -265,7 +271,12 @@ func (a *Agent) usable(s *sub) bool {
 	return a.persistOK.Load() &&
 		s.enabled.Load() &&
 		a.now().UnixNano() < s.expiresAt.Load() &&
-		s.used.Load() < s.entitled.Load()
+		s.hasQuota()
+}
+
+// hasQuota 报告额度是否未耗尽；不限流量的订阅（D-25）总是有额度。
+func (s *sub) hasQuota() bool {
+	return s.unmetered.Load() || s.used.Load() < s.entitled.Load()
 }
 
 // Kicks 返回累计断开事件数。

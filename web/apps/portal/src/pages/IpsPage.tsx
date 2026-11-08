@@ -3,12 +3,13 @@ import { useQuery } from '@tanstack/react-query'
 import { Button, Result, Skeleton } from 'antd'
 import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { remainingBytes, type Subscription } from '@isp/api-client'
+import { isDirect, isIsp, remainingBytes, type Subscription } from '@isp/api-client'
 import { POLL_MS, api, errorText, qk } from '../app/api'
 import { useTitle } from '../app/Shell'
 import { StateMark } from '@isp/ui'
 import { Plate } from '@isp/ui'
 import { SimCard } from '../components/SimCard'
+import { DirectCard } from '../components/DirectCard'
 import { fmtBytes, splitDuration } from '../lib/format'
 import { isExpiring, isLowTraffic } from '../lib/status'
 
@@ -47,6 +48,7 @@ function Counts({ subs }: { subs: Subscription[] }) {
 function Attention({ subs, awaiting }: { subs: Subscription[]; awaiting: number }) {
   const items: { key: string; to: string; icon: ReactNode; text: string }[] = []
   for (const s of subs) {
+    if (isDirect(s)) continue // 直出代理跟随付费 IP，没有自己的到期与流量提醒
     if (isExpiring(s)) {
       const d = splitDuration(s.time.remainingSeconds)
       items.push({
@@ -143,8 +145,11 @@ export default function IpsPage() {
         <>
           <Attention subs={subs.data} awaiting={awaiting} />
           <div className="sim-grid">
-            {subs.data.map((s) => (
+            {subs.data.filter(isIsp).map((s) => (
               <SimCard key={s.id} sub={s} />
+            ))}
+            {subs.data.filter(isDirect).map((s) => (
+              <DirectCard key={s.id} sub={s} />
             ))}
           </div>
         </>

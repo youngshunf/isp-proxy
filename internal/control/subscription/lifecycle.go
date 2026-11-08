@@ -23,20 +23,20 @@ func New(env *kernel.Env, tasks *task.Service) *Service { return &Service{env: e
 
 // lockState 对订阅加锁并返回生命周期等状态。
 type state struct {
-	Lifecycle, UserID      string
-	Paused                 bool
-	CurAccess, CurExit     *string
-	Entitled, Used         int64
-	Expires, RetentionEnds *time.Time
-	RulesVersion           string
+	Lifecycle, UserID, Kind string
+	Paused                  bool
+	CurAccess, CurExit      *string
+	Entitled, Used          int64
+	Expires, RetentionEnds  *time.Time
+	RulesVersion            string
 }
 
 func lock(ctx context.Context, tx *kernel.Tx, id string) (*state, error) {
 	st := &state{}
-	err := tx.QueryRow(ctx, `SELECT lifecycle, user_id, admin_paused, current_access_id, current_exit_id, entitled_bytes_total,
+	err := tx.QueryRow(ctx, `SELECT lifecycle, user_id, kind, admin_paused, current_access_id, current_exit_id, entitled_bytes_total,
 	                            used_bytes_total, expires_at, retention_ends_at, rules_version
 	                          FROM subscriptions WHERE id = $1 FOR UPDATE`, id).
-		Scan(&st.Lifecycle, &st.UserID, &st.Paused, &st.CurAccess, &st.CurExit, &st.Entitled, &st.Used, &st.Expires, &st.RetentionEnds,
+		Scan(&st.Lifecycle, &st.UserID, &st.Kind, &st.Paused, &st.CurAccess, &st.CurExit, &st.Entitled, &st.Used, &st.Expires, &st.RetentionEnds,
 			&st.RulesVersion)
 	if kernel.IsNoRows(err) {
 		return nil, httpx.NotFound("没有找到这个订阅")
@@ -164,6 +164,9 @@ func (s *Service) Delete(ctx context.Context, tx *kernel.Tx, id, adminID, reason
 	st, err := lock(ctx, tx, id)
 	if err != nil {
 		return err
+	}
+	if st.Kind == task.KindDirect {
+		return httpx.Precondition("直出代理请在用户详情中取消赠送（收回）")
 	}
 	switch st.Lifecycle {
 	case "deleted":

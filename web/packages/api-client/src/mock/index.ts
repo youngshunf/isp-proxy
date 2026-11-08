@@ -102,6 +102,8 @@ function seed(now: number) {
       sub: {
         id: 'sub_7k2m',
         name: 'TikTok 美区 1 号',
+        kind: 'isp',
+        direct: null,
         plan: { name: '美国 · 洛杉矶 包月', countryCode: 'us', country: '美国', city: '洛杉矶', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'active',
         time: { periodDays: 60, startedAt: iso(now - 37 * DAY), expiresAt: iso(now + 23 * DAY + 4 * HOUR), retentionEndsAt: null },
@@ -124,6 +126,8 @@ function seed(now: number) {
       sub: {
         id: 'sub_d3fq',
         name: '亚马逊德国店',
+        kind: 'isp',
+        direct: null,
         plan: { name: '德国 · 法兰克福 包月', countryCode: 'de', country: '德国', city: '法兰克福', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'active',
         time: { periodDays: 30, startedAt: iso(now - 28 * DAY), expiresAt: iso(now + 2 * DAY + 6 * HOUR), retentionEndsAt: null },
@@ -142,6 +146,8 @@ function seed(now: number) {
       sub: {
         id: 'sub_j9tx',
         name: '采集任务 · 日本',
+        kind: 'isp',
+        direct: null,
         plan: { name: '日本 · 东京 包月', countryCode: 'jp', country: '日本', city: '东京', concurrency: 80, bandwidthMbps: 30 },
         lifecycle: 'active',
         time: { periodDays: 30, startedAt: iso(now - 13 * DAY), expiresAt: iso(now + 17 * DAY), retentionEndsAt: null },
@@ -163,6 +169,8 @@ function seed(now: number) {
       sub: {
         id: 'sub_s4wp',
         name: 'Shopee 新加坡',
+        kind: 'isp',
+        direct: null,
         plan: { name: '新加坡 包月', countryCode: 'sg', country: '新加坡', city: '新加坡', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'retained',
         time: { periodDays: 30, startedAt: iso(now - 33 * DAY), expiresAt: iso(now - 3 * DAY), retentionEndsAt: iso(now + 4 * DAY) },
@@ -182,6 +190,8 @@ function seed(now: number) {
       sub: {
         id: 'sub_g5ln',
         name: 'TikTok 英国',
+        kind: 'isp',
+        direct: null,
         plan: { name: '英国 · 伦敦 包月', countryCode: 'gb', country: '英国', city: '伦敦', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'pending',
         time: { periodDays: 30, startedAt: null, expiresAt: null, retentionEndsAt: null },
@@ -198,6 +208,8 @@ function seed(now: number) {
       sub: {
         id: 'sub_n2ry',
         name: 'Facebook 广告 · 美东',
+        kind: 'isp',
+        direct: null,
         plan: { name: '美国 · 纽约 包月', countryCode: 'us', country: '美国', city: '纽约', concurrency: 50, bandwidthMbps: 20 },
         lifecycle: 'active',
         time: { periodDays: 30, startedAt: iso(now - 9 * DAY), expiresAt: iso(now + 21 * DAY), retentionEndsAt: null },
@@ -210,6 +222,27 @@ function seed(now: number) {
       },
       events: [
         { id: 'e1', at: iso(now - 9 * DAY), kind: 'ready', detail: '开通就绪，开始计时；出口 198.51.100.140，接入 v1', orderNo: 'ORD-20261029-0024' },
+      ],
+    },
+    {
+      // 服务器直出代理（D-25）：管理员赠送，没有套餐与出口；可用截止由 view() 按付费订阅计算。
+      sub: {
+        id: 'sub_dx01',
+        name: '服务器直出',
+        kind: 'direct',
+        direct: { bandwidthMbps: 10, maxConnections: 64, paidUntil: null },
+        plan: null,
+        lifecycle: 'active',
+        time: { periodDays: 0, startedAt: iso(now - 6 * DAY), expiresAt: null, retentionEndsAt: null },
+        traffic: { totalBytes: 0, usedBytes: 312.4 * GB },
+        exit: null,
+        access: access(1, 'udx01', 'Rt7mZ3qLw9Kc', 31580, now - 6 * DAY),
+        quotas: { accessChangesLeft: 5, accessChangesPerDay: 5, freeExitChangesLeft: 0, freeExitWindowEndsAt: null },
+        openExitRequestId: null,
+        openOrderIds: [],
+      },
+      events: [
+        { id: 'e1', at: iso(now - 6 * DAY), kind: 'ready', detail: '服务器直出代理已开通，接入 v1；不限流量，跟随你的付费 IP 有效' },
       ],
     },
   ]
@@ -294,10 +327,17 @@ function seed(now: number) {
   return { catalog, subs, orders, requests }
 }
 
-/** 按 docs/01 §7.2 优先级推导阻断原因。 */
-function blockersOf(s: SubSeed, remainingSeconds: number, banned: boolean): Blocker[] {
+/** 按 docs/01 §7.2 优先级推导阻断原因。直出代理（D-25）不会到期也不会耗尽，没有付费订阅时为 no_paid_subscription。 */
+function blockersOf(s: SubSeed, remainingSeconds: number, banned: boolean, paidUntil: string | null): Blocker[] {
   const b: Blocker[] = []
   if (banned) b.push('account_banned')
+  if (s.sub.kind === 'direct') {
+    if (s.adminPaused) b.push('admin_paused')
+    if (s.sub.lifecycle === 'pending') b.push('pending')
+    if (s.sub.lifecycle === 'fulfill_failed') b.push('fulfill_failed')
+    if (s.sub.lifecycle === 'active' && !paidUntil) b.push('no_paid_subscription')
+    return b
+  }
   if (s.sub.lifecycle === 'released') b.push('released')
   if (s.adminPaused) b.push('admin_paused')
   if (s.sub.lifecycle === 'pending') b.push('pending')
@@ -360,14 +400,35 @@ export function createMockApi(opts: MockOptions = {}): MockPortalApi {
     return account
   }
 
+  /** 直出代理的可用截止：时长有效（已开始、未到期）的 ISP 订阅中最晚的到期时间。 */
+  const paidUntil = (): string | null => {
+    let best: string | null = null
+    for (const x of db.subs) {
+      const t = x.sub.time
+      if (x.sub.kind !== 'isp' || !t.startedAt || !t.expiresAt || Date.parse(t.expiresAt) <= now) continue
+      if (best === null || t.expiresAt > best) best = t.expiresAt
+    }
+    return best
+  }
+
   const view = (s: SubSeed): Subscription => {
-    const exp = s.sub.time.expiresAt ? Date.parse(s.sub.time.expiresAt) : null
+    const until = s.sub.kind === 'direct' ? paidUntil() : null
+    const expiresAt = s.sub.kind === 'direct' ? until : s.sub.time.expiresAt
+    const exp = expiresAt ? Date.parse(expiresAt) : null
     const remainingSeconds = exp === null ? 0 : Math.max(0, Math.floor((exp - now) / 1000))
     return {
       ...s.sub,
-      time: { ...s.sub.time, remainingSeconds },
-      blockers: blockersOf(s, remainingSeconds, account?.status === 'banned'),
+      direct: s.sub.direct ? { ...s.sub.direct, paidUntil: until } : null,
+      time: { ...s.sub.time, expiresAt, remainingSeconds },
+      blockers: blockersOf(s, remainingSeconds, account?.status === 'banned', until),
     }
+  }
+
+  /** 直出代理不能续时长、加流量或换出口（服务端返回 412）。 */
+  const ispOnly = (s: SubSeed) => {
+    if (s.sub.kind === 'direct' || !s.sub.plan)
+      throw new ApiError('precondition', '直出代理跟随你的付费 IP 有效且不限流量，不能续时长、加流量或换出口')
+    return s.sub.plan
   }
 
   const findSub = (id: string) => {
@@ -541,8 +602,9 @@ export function createMockApi(opts: MockOptions = {}): MockPortalApi {
           }
         } else {
           const s = findSub(input.subscriptionId)
+          const subPlan = ispOnly(s)
           if (input.kind === 'renew_time') {
-            const plan = db.catalog.plans.find((p) => p.city === s.sub.plan.city)
+            const plan = db.catalog.plans.find((p) => p.city === subPlan.city)
             const yuan = ((plan?.monthlyPrice.amount ?? 16800) / 100) * input.months
             order = {
               ...base, kind: 'renew_time', amount: cny(yuan), subscriptionId: s.sub.id, subscriptionName: s.sub.name,
@@ -605,6 +667,7 @@ export function createMockApi(opts: MockOptions = {}): MockPortalApi {
       wait(() => once(`exit:${key}`, () => {
         authed()
         const s = findSub(input.subscriptionId)
+        ispOnly(s)
         if (s.sub.openExitRequestId) {
           const existing = db.requests.find((r) => r.id === s.sub.openExitRequestId)
           throw new ApiError('conflict', '这个 IP 已有未完成的换出口申请', { details: existing ? { existing } : null })

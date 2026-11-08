@@ -23,8 +23,10 @@ var ErrEgressBlocked = errors.New("agent: egress destination blocked")
 // 任一结果被封即拒绝；解析失败或无结果同样拒绝（失败即拒绝）。
 //
 // 已知残余风险：上游代理会自己再解析一次主机名，DNS 结果在两次解析之间可能变化
-// （DNS rebinding）。对目标做 IP 固定会让出口侧的地理 DNS 失效，所以首期不做；
-// 由于流量总是经 ISP 上游出站、节点不直连目标，可达的私网只会是上游一侧的网络。
+// （DNS rebinding）。对目标做 IP 固定会让出口侧的地理 DNS 失效，所以 ISP 订阅不做；
+// 由于 ISP 订阅的流量总是经上游出站、节点不直连目标，可达的私网只会是上游一侧的网络。
+// 直出代理（D-25）由节点自己连接目标，因此另用 resolveDirect：解析一次、按结果拨号（IP 固定），
+// 并另封 465、587 端口。
 type EgressPolicy struct {
 	// AllowCIDRs 中的地址不受地址封禁约束（端口封禁照旧），用于测试与回环 E2E。
 	AllowCIDRs []netip.Prefix
@@ -82,51 +84,80 @@ var blockedNames = map[string]bool{
 	"localhost":                  true,
 }
 
+// directBlockedPorts 是直出代理（D-25）在 blockedPorts 之外另封的端口：465（SMTPS）、587（邮件提交）。
+// 直出流量以中转服务器自身地址出站，滥用投诉会直接落到服务器提供商（R-13.6）。
+var directBlockedPorts = []int{465, 587}
+
 // Check 判断经出口访问 address（host:port）是否允许。允许时返回 nil；
 // 拒绝时返回包装了 ErrEgressBlocked 的错误，附带原因。
 func (p *EgressPolicy) Check(ctx context.Context, network, address string) error {
+	_, err := p.check(ctx, address, nil)
+	return err
+}
+
+// CheckDirect 是直出代理的出站检查：在 Check 之外另封 465、587 端口（AllowPorts 同样可以放开）。
+func (p *EgressPolicy) CheckDirect(ctx context.Context, network, address string) error {
+	_, err := p.check(ctx, address, directBlockedPorts)
+	return err
+}
+
+// resolveDirect 按直出策略检查 address 并返回允许拨号的地址。主机名只在这里解析一次，拨号使用这次的结果
+// （IP 固定）：直出由节点自己连接目标，若拨号时再解析一次，两次解析之间 DNS 结果变化（DNS rebinding）
+// 就能把连接引到节点自己的私网或元数据地址。直出从节点本机出站，按节点解析即正确的地理结果。
+func (p *EgressPolicy) resolveDirect(ctx context.Context, address string) ([]netip.AddrPort, error) {
+	return p.check(ctx, address, directBlockedPorts)
+}
+
+// check 是 Check 与 CheckDirect 的实现；extraPorts 是在 blockedPorts 之外另封的端口。
+// 允许时返回目标的全部地址（每个都已通过检查）。
+func (p *EgressPolicy) check(ctx context.Context, address string, extraPorts []int) ([]netip.AddrPort, error) {
 	host, portStr, err := net.SplitHostPort(address)
 	if err != nil || host == "" {
-		return blockedf("malformed address %q", address)
+		return nil, blockedf("malformed address %q", address)
 	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port <= 0 || port > 65535 {
-		return blockedf("invalid port in %q", address)
+		return nil, blockedf("invalid port in %q", address)
 	}
-	if slices.Contains(blockedPorts, port) && !slices.Contains(p.AllowPorts, port) {
-		return blockedf("port %d", port)
+	if (slices.Contains(blockedPorts, port) || slices.Contains(extraPorts, port)) && !slices.Contains(p.AllowPorts, port) {
+		return nil, blockedf("port %d", port)
 	}
 
 	if ip, err := netip.ParseAddr(host); err == nil {
-		return p.checkAddr(ip)
+		if err := p.checkAddr(ip); err != nil {
+			return nil, err
+		}
+		return []netip.AddrPort{netip.AddrPortFrom(ip.WithZone("").Unmap(), uint16(port))}, nil
 	}
 
 	name := strings.TrimSuffix(strings.ToLower(host), ".")
 	if blockedNames[name] || strings.HasSuffix(name, ".localhost") {
-		return blockedf("name %q", host)
+		return nil, blockedf("name %q", host)
 	}
 	// 合法的 DNS 顶级域不会全是数字；“127.1”“2130706433”“0x7f.0.0.1”一类写法
 	// 可能被上游按 inet_aton 解释为私网地址，直接拒绝。
 	labels := strings.Split(name, ".")
 	if isDigits(labels[len(labels)-1]) || slices.ContainsFunc(labels, func(l string) bool { return strings.HasPrefix(l, "0x") }) {
-		return blockedf("numeric host %q", host)
+		return nil, blockedf("numeric host %q", host)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
 	addrs, err := p.resolve(ctx, name)
 	if err != nil {
-		return blockedf("resolve %q: %v", host, err)
+		return nil, blockedf("resolve %q: %v", host, err)
 	}
 	if len(addrs) == 0 {
-		return blockedf("resolve %q: no address", host)
+		return nil, blockedf("resolve %q: no address", host)
 	}
+	out := make([]netip.AddrPort, 0, len(addrs))
 	for _, ip := range addrs {
 		if err := p.checkAddr(ip); err != nil {
-			return fmt.Errorf("%w (resolved from %q)", err, host)
+			return nil, fmt.Errorf("%w (resolved from %q)", err, host)
 		}
+		out = append(out, netip.AddrPortFrom(ip.WithZone("").Unmap(), uint16(port)))
 	}
-	return nil
+	return out, nil
 }
 
 func (p *EgressPolicy) resolve(ctx context.Context, host string) ([]netip.Addr, error) {
