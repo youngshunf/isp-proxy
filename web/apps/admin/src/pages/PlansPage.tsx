@@ -3,16 +3,16 @@
 // 出口类型（D-24）：独享 / 共享在新建时选定，之后不能改（已售订阅按购买时的类型执行）。
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Input, InputNumber, Segmented, Select, Space, Table, Tabs } from 'antd'
+import { App, Button, Input, InputNumber, Segmented, Space, Table, Tabs } from 'antd'
 import { useState } from 'react'
 import type { AdminPlan, AdminTrafficPack, ExitMode, PlanVersionInput, SaleStatus } from '@isp/api-client/admin'
 import { CountryFlag, ExitModeChip, GB, Plate, fmtBytes, fmtDateTime, fmtMoney } from '@isp/ui'
 import { qk, useApi } from '../app/api'
 import { LoadError, Loading, Mono, PageHead, State } from '../components/bits'
 import { ConfirmAction } from '../components/ConfirmAction'
+import { CountryField, countryReady } from '../components/CountryField'
 import { SALE } from '../lib/status'
 
-const COUNTRY: Record<string, string> = { us: '美国', gb: '英国', de: '德国', jp: '日本', sg: '新加坡', ca: '加拿大' }
 
 export default function PlansPage() {
   return (
@@ -175,7 +175,7 @@ function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () =>
   }
   // 城市可选（D-27）：留空提交 null，表示不限城市。
   const body = (): PlanVersionInput => ({ ...v, name: v.name.trim(), city: cityOf(v) || null })
-  const ready = v.name.trim() && v.concurrency >= 1 && v.bandwidthMbps >= 1 && (plan ? diffs.length > 0 : /^[a-z0-9][a-z0-9-]{1,31}$/.test(code))
+  const ready = v.name.trim() && countryReady({ code: v.countryCode, name: v.country }) && v.concurrency >= 1 && v.bandwidthMbps >= 1 && (plan ? diffs.length > 0 : /^[a-z0-9][a-z0-9-]{1,31}$/.test(code))
   return (
     <ConfirmAction
       open
@@ -241,15 +241,11 @@ function PlanVersionDialog({ plan, onClose }: { plan?: AdminPlan; onClose: () =>
           <span className="field-label">名称</span>
           <Input aria-label="套餐名称" value={v.name} onChange={(e) => set('name', e.target.value)} />
         </label>
-        <label className="field" style={{ marginTop: 12 }}>
-          <span className="field-label">国家</span>
-          <Select
-            aria-label="国家"
-            value={v.countryCode}
-            onChange={(x) => setV((o) => ({ ...o, countryCode: x, country: COUNTRY[x] ?? x }))}
-            options={Object.entries(COUNTRY).map(([value, label]) => ({ value, label }))}
-          />
-        </label>
+        <CountryField
+          style={{ marginTop: 12 }}
+          value={{ code: v.countryCode, name: v.country }}
+          onChange={(x) => setV((o) => ({ ...o, countryCode: x.code, country: x.name }))}
+        />
         <label className="field" style={{ marginTop: 12 }}>
           <span className="field-label">
             城市<em>可选</em>

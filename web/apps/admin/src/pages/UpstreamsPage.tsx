@@ -12,7 +12,8 @@ import { errorText, qk, useApi } from '../app/api'
 import { LoadError, Loading, Mono, PageHead, State } from '../components/bits'
 import { ConfirmAction } from '../components/ConfirmAction'
 import { DataTable, arr, str, type Column, type FilterDef } from '../components/DataTable'
-import { COUNTRIES, UpstreamDialog } from '../components/UpstreamDialog'
+import { UpstreamDialog } from '../components/UpstreamDialog'
+import { COMMON_COUNTRIES, OTHER_COUNTRIES } from '../lib/countries'
 import { useProbe } from '../lib/jobs'
 import { LIFECYCLE, UPSTREAM, options } from '../lib/status'
 
@@ -39,7 +40,7 @@ export default function UpstreamsPage() {
     () => [
       { key: 'q', label: '搜索', type: 'search', placeholder: '主机、资源 ID、供应商、出口 IP' },
       { key: 'status', label: '状态', type: 'multi', options: options(UPSTREAM) },
-      { key: 'countryCode', label: '国家', type: 'select', options: COUNTRIES, width: 110 },
+      { key: 'countryCode', label: '国家', type: 'select', options: [...COMMON_COUNTRIES, ...OTHER_COUNTRIES], width: 130 },
       { key: 'nodeId', label: '节点', type: 'select', options: (nodes.data ?? []).map((n) => ({ value: n.id, label: n.name })), width: 130 },
     ],
     [nodes.data],

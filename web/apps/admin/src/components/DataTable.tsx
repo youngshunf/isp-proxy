@@ -238,6 +238,8 @@ function FilterControl({ def, value, onChange }: { def: FilterDef; value: Filter
           value={typeof value === 'string' ? value : undefined}
           onChange={(v) => onChange(v ?? undefined)}
           options={def.type === 'bool' ? (def.options ?? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]) : def.options}
+          showSearch={def.type === 'select' && (def.options?.length ?? 0) > 12}
+          optionFilterProp="label"
           style={{ width: def.width ?? 150 }}
           popupMatchSelectWidth={false}
         />

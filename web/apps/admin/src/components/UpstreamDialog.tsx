@@ -4,16 +4,9 @@ import { App, Input, InputNumber, Modal, Segmented, Select } from 'antd'
 import { useEffect, useState } from 'react'
 import type { Upstream } from '@isp/api-client/admin'
 import { errorText, qk, useApi } from '../app/api'
+import { countryName } from '../lib/countries'
 import { Callout } from './bits'
-
-export const COUNTRIES = [
-  { value: 'us', label: '美国' },
-  { value: 'gb', label: '英国' },
-  { value: 'de', label: '德国' },
-  { value: 'jp', label: '日本' },
-  { value: 'sg', label: '新加坡' },
-  { value: 'ca', label: '加拿大' },
-]
+import { CountryField, countryReady } from './CountryField'
 
 export interface FormState {
   mode: 'url' | 'fields'
@@ -25,6 +18,8 @@ export interface FormState {
   password: string
   nodeId?: string
   countryCode?: string
+  /** 国家显示名称；从列表选时自动填，手动输入时由管理员填写。缺省时按代码取中文名。 */
+  countryName?: string
   /** 城市可选（D-27）：留空表示供应商没有给出城市。 */
   city: string
   provider: string
@@ -71,6 +66,7 @@ export function UpstreamDialog({
         password: '',
         nodeId: value.nodeId,
         countryCode: value.countryCode,
+        countryName: value.country,
         city: value.city ?? '',
         provider: value.provider,
         note: value.note,
@@ -78,7 +74,7 @@ export function UpstreamDialog({
       })
   }, [value])
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((x) => ({ ...x, [k]: v }))
-  const country = COUNTRIES.find((c) => c.value === f.countryCode)
+  const country = { code: f.countryCode ?? '', name: f.countryName ?? countryName(f.countryCode) ?? '' }
 
   const submit = async () => {
     setBusy(true)
@@ -94,8 +90,8 @@ export function UpstreamDialog({
             port: f.port ?? undefined,
             username: f.username,
             password: f.password || undefined,
-            countryCode: f.countryCode,
-            country: country?.label,
+            countryCode: country.code,
+            country: country.name.trim(),
             // 留空即清除城市（null）。
             city: f.city.trim() || null,
             provider: f.provider,
@@ -109,8 +105,8 @@ export function UpstreamDialog({
           body: {
             ...(f.mode === 'url' ? { url: f.url.trim() } : { protocol: f.protocol, host: f.host.trim(), port: f.port ?? undefined, username: f.username, password: f.password || undefined }),
             nodeId: f.nodeId!,
-            countryCode: f.countryCode!,
-            country: country?.label ?? f.countryCode!,
+            countryCode: country.code,
+            country: country.name.trim(),
             city: f.city.trim() || undefined,
             provider: f.provider || undefined,
             note: f.note || undefined,
@@ -131,7 +127,7 @@ export function UpstreamDialog({
 
   const connReady = f.mode === 'url' ? f.url.trim().length > 0 : f.host.trim().length > 0 && !!f.port
   const shared = editing?.occupancy.mode === 'shared' ? editing.occupancy : null
-  const ready = connReady && !!f.nodeId && !!f.countryCode
+  const ready = connReady && !!f.nodeId && countryReady(country)
 
   return (
     <Modal
@@ -197,10 +193,7 @@ export function UpstreamDialog({
             <span className="field-label">节点</span>
             <Select aria-label="节点" value={f.nodeId} onChange={(v) => set('nodeId', v)} options={nodes} disabled={!!editing} />
           </label>
-          <label className="field">
-            <span className="field-label">国家</span>
-            <Select aria-label="国家" value={f.countryCode} onChange={(v) => set('countryCode', v)} options={COUNTRIES} />
-          </label>
+          <CountryField value={country} onChange={(v) => setF((x) => ({ ...x, countryCode: v.code, countryName: v.name }))} />
           <label className="field" style={{ marginTop: 12 }}>
             <span className="field-label">
               城市<em>可选</em>
